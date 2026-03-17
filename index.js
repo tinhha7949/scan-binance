@@ -3,9 +3,9 @@ const fetch = require("node-fetch");
 
 const app = express();
 
-// SERVER giữ Railway sống
+// giữ server sống
 app.get("/", (req, res) => {
-  res.send("🚀 FUTURE BOT RUNNING");
+  res.send("🚀 BOT SCAN ĐANG CHẠY");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -15,8 +15,7 @@ app.listen(PORT, () => console.log("Server chạy cổng", PORT));
 
 async function ultimateFutureScanner() {
 
-  console.clear();
-  console.log("🚀 ULTIMATE FUTURE SCANNER");
+  console.log("🚀 SCANNING...");
 
   let coins = [
     "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT",
@@ -109,7 +108,6 @@ async function ultimateFutureScanner() {
     let side = null;
     let score = 0;
 
-    // TREND
     if (ema20 > ema50 && ema50 > ema200) {
       side = "LONG";
       score += 60;
@@ -120,27 +118,21 @@ async function ultimateFutureScanner() {
       score += 60;
     }
 
-    // RSI
     if (side === "LONG" && r > 50 && r < 65) score += 20;
     if (side === "SHORT" && r > 35 && r < 50) score += 20;
 
-    // VOLUME BUILDUP
     if (lastVol[3] > lastVol[2] && lastVol[2] > lastVol[1]) {
       score += 30;
     }
 
-    // VOLUME SPIKE
     if (volNow > volAvg * 2) score += 40;
 
-    // MOMENTUM
     if (side === "LONG" && last4[3] > last4[2] && last4[2] > last4[1]) score += 30;
     if (side === "SHORT" && last4[3] < last4[2] && last4[2] < last4[1]) score += 30;
 
-    // BREAKOUT
     if (side === "LONG" && price > high50 * 0.998) score += 40;
     if (side === "SHORT" && price < low50 * 1.002) score += 40;
 
-    // VOLATILITY
     if (atrVal / price > 0.004) score += 20;
 
     if (side && score >= 130) {
@@ -178,7 +170,6 @@ SL ${c.sl.toFixed(4)}
 Score ${c.score}
 `);
   });
-
 }
 
 // chạy liên tục
