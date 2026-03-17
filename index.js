@@ -144,7 +144,7 @@ async function scan(){
 
   async function getData(symbol){
     try{
-      let url= `https://fapi.binance.com/fapi/v1/klines?symbol=\${symbol}&interval=15m&limit=200\`;
+      let url= `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=200`;
       let res=await fetch(url);
       if(!res.ok) return null;
       return await res.json();
