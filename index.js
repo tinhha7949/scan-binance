@@ -6,6 +6,20 @@ const app = express();
 let signals = [];
 let lastUpdate = "";
 
+// ===== FULL 50 COIN =====
+const coins = [
+"BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT",
+"ADAUSDT","AVAXUSDT","DOGEUSDT","LINKUSDT","DOTUSDT",
+"MATICUSDT","LTCUSDT","TRXUSDT","ATOMUSDT","NEARUSDT",
+"INJUSDT","APTUSDT","OPUSDT","ARBUSDT","SUIUSDT",
+"SEIUSDT","TIAUSDT","FILUSDT","AAVEUSDT","RNDRUSDT",
+"GALAUSDT","DYDXUSDT","ETCUSDT","ICPUSDT","THETAUSDT",
+"KASUSDT","STXUSDT","IMXUSDT","FLOWUSDT","EGLDUSDT",
+"XTZUSDT","KAVAUSDT","CRVUSDT","SANDUSDT","MANAUSDT",
+"APEUSDT","LDOUSDT","RUNEUSDT","COMPUSDT","SNXUSDT",
+"CHZUSDT","ZILUSDT","1INCHUSDT","BATUSDT","ENSUSDT"
+];
+
 // ===== API =====
 app.get("/api", (req, res) => {
   res.json({ signals, lastUpdate });
@@ -21,10 +35,10 @@ app.get("/", (req, res) => {
   res.send(`
   <html>
   <head>
-    <title>Scanner</title>
+    <title>Future Scanner</title>
     <style>
       body{background:#0f172a;color:#fff;font-family:Arial;padding:20px}
-      button{padding:10px;background:#38bdf8;border:none;border-radius:6px}
+      button{padding:10px;background:#38bdf8;border:none;border-radius:6px;cursor:pointer}
       .card{background:#020617;padding:10px;margin:10px 0;border-radius:8px}
       .long{color:#22c55e}
       .short{color:#ef4444}
@@ -39,25 +53,30 @@ app.get("/", (req, res) => {
 
   <script>
   async function load(){
-    let res = await fetch("/api");
-    let d = await res.json();
+    try{
+      let res = await fetch("/api");
+      let d = await res.json();
 
-    document.getElementById("time").innerText = d.lastUpdate;
+      document.getElementById("time").innerText = d.lastUpdate;
 
-    let html = "";
+      let html = "";
 
-    d.signals.forEach(function(c){
-      html += '<div class="card">'
-      + '<b>'+c.symbol+'</b><br>'
-      + '<span class="'+(c.side==="LONG"?"long":"short")+'">'+c.side+'</span><br>'
-      + 'Entry: '+c.price.toFixed(4)+'<br>'
-      + 'TP: '+c.tp.toFixed(4)+'<br>'
-      + 'SL: '+c.sl.toFixed(4)+'<br>'
-      + 'Score: '+c.score
-      + '</div>';
-    });
+      d.signals.forEach(function(c){
+        html += '<div class="card">'
+        + '<b>'+c.symbol+'</b><br>'
+        + '<span class="'+(c.side==="LONG"?"long":"short")+'">'+c.side+'</span><br>'
+        + 'Entry: '+c.price.toFixed(4)+'<br>'
+        + 'TP: '+c.tp.toFixed(4)+'<br>'
+        + 'SL: '+c.sl.toFixed(4)+'<br>'
+        + 'Score: '+c.score
+        + '</div>';
+      });
 
-    document.getElementById("list").innerHTML = html;
+      document.getElementById("list").innerHTML = html;
+
+    }catch(e){
+      console.log("UI lỗi:", e);
+    }
   }
 
   async function scanNow(){
@@ -81,7 +100,7 @@ app.listen(PORT, () => console.log("RUNNING PORT", PORT));
 // ===== BOT =====
 async function scan(){
 
-  let coins = ["BTCUSDT","ETHUSDT","SOLUSDT"];
+  console.log("🚀 SCAN...");
 
   function ema(arr,p){
     let k=2/(p+1),e=arr[0];
@@ -102,8 +121,17 @@ async function scan(){
   async function getData(symbol){
     try{
       let url = "https://fapi.binance.com/fapi/v1/klines?symbol="+symbol+"&interval=15m&limit=200";
+
       let res = await fetch(url);
-      return await res.json();
+      if(!res.ok) return null;
+
+      let data = await res.json();
+
+      if(!Array.isArray(data)) return null;
+      if(data.length === 0) return null;
+
+      return data;
+
     }catch{
       return null;
     }
@@ -112,37 +140,44 @@ async function scan(){
   let results=[];
 
   for(let symbol of coins){
-    let data=await getData(symbol);
+
+    let data = await getData(symbol);
     if(!data) continue;
 
-    let closes=data.map(x=>parseFloat(x[4]));
-    let price=closes[closes.length-1];
+    let closes = data.map(x=>parseFloat(x[4]));
+    if(closes.length < 50) continue;
 
-    let e20=ema(closes.slice(-40),20);
-    let e50=ema(closes.slice(-80),50);
+    let price = closes[closes.length-1];
 
-    let r=rsi(closes);
+    let e20 = ema(closes.slice(-40),20);
+    let e50 = ema(closes.slice(-80),50);
+
+    let r = rsi(closes);
 
     let side=null,score=0;
 
     if(e20>e50){side="LONG";score+=60}
     if(e20<e50){side="SHORT";score+=60}
 
-    if(side==="LONG"&&r>50)score+=20;
-    if(side==="SHORT"&&r<50)score+=20;
+    if(side==="LONG" && r>50) score+=20;
+    if(side==="SHORT" && r<50) score+=20;
 
     if(score>=80){
-      let tp=side==="LONG"?price*1.05:price*0.95;
-      let sl=side==="LONG"?price*0.985:price*1.015;
+      let tp = side==="LONG"?price*1.05:price*0.95;
+      let sl = side==="LONG"?price*0.985:price*1.015;
 
       results.push({symbol,side,price,tp,sl,score});
     }
   }
 
-  signals = results;
+  results.sort((a,b)=>b.score-a.score);
+
+  signals = results.slice(0,10);
   lastUpdate = new Date().toLocaleTimeString();
+
+  console.log("✅ DONE:", signals.length);
 }
 
-// chạy liên tục
+// chạy auto
 scan();
 setInterval(scan,300000);
