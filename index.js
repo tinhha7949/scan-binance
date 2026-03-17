@@ -36,63 +36,136 @@ app.get("/", (req, res) => {
   <html>
   <head>
     <title>Future Scanner</title>
+
     <style>
-      body{background:#0f172a;color:#fff;font-family:Arial;padding:20px}
-      button{padding:10px;background:#38bdf8;border:none;border-radius:6px;cursor:pointer}
-      .card{background:#020617;padding:10px;margin:10px 0;border-radius:8px}
-      .long{color:#22c55e}
-      .short{color:#ef4444}
+      body{
+        background:#0b1220;
+        color:#e5e7eb;
+        font-family:Arial;
+        padding:20px;
+      }
+
+      h1{
+        color:#22c55e;
+      }
+
+      button{
+        padding:10px 15px;
+        background:#22c55e;
+        border:none;
+        border-radius:8px;
+        cursor:pointer;
+        font-weight:bold;
+      }
+
+      button:hover{
+        background:#16a34a;
+      }
+
+      .top{
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        margin-bottom:15px;
+      }
+
+      .card{
+        background:#111827;
+        padding:15px;
+        margin-bottom:10px;
+        border-radius:10px;
+        border-left:5px solid #22c55e;
+      }
+
+      .short{
+        border-left:5px solid #ef4444;
+      }
+
+      .symbol{
+        font-size:18px;
+        font-weight:bold;
+      }
+
+      .long{
+        color:#22c55e;
+        font-weight:bold;
+      }
+
+      .short-text{
+        color:#ef4444;
+        font-weight:bold;
+      }
+
+      .loading{
+        color:#9ca3af;
+        font-style:italic;
+      }
+
     </style>
   </head>
+
   <body>
 
-  <h2>🚀 FUTURE SCANNER</h2>
-  <button onclick="scanNow()">Scan lại</button>
-  <p>Last: <span id="time"></span></p>
-  <div id="list"></div>
+    <div class="top">
+      <h1>🚀 Future Scanner</h1>
+      <button onclick="scanNow()">🔄 Scan</button>
+    </div>
 
-  <script>
-  async function load(){
-    try{
-      let res = await fetch("/api");
-      let d = await res.json();
+    <div>⏱ Last update: <span id="time">...</span></div>
+    <br>
 
-      document.getElementById("time").innerText = d.lastUpdate;
+    <div id="list" class="loading">Đang load dữ liệu...</div>
 
-      let html = "";
+    <script>
 
-      d.signals.forEach(function(c){
-        html += '<div class="card">'
-        + '<b>'+c.symbol+'</b><br>'
-        + '<span class="'+(c.side==="LONG"?"long":"short")+'">'+c.side+'</span><br>'
-        + 'Entry: '+c.price.toFixed(4)+'<br>'
-        + 'TP: '+c.tp.toFixed(4)+'<br>'
-        + 'SL: '+c.sl.toFixed(4)+'<br>'
-        + 'Score: '+c.score
-        + '</div>';
-      });
+    async function load(){
+      try{
+        let res = await fetch("/api");
+        let d = await res.json();
 
-      document.getElementById("list").innerHTML = html;
+        document.getElementById("time").innerText = d.lastUpdate || "...";
 
-    }catch(e){
-      console.log("UI lỗi:", e);
+        let html = "";
+
+        if(d.signals.length === 0){
+          html = "<div class='loading'>❌ Không có kèo phù hợp</div>";
+        }
+
+        d.signals.forEach(c=>{
+          html += \`
+            <div class="card \${c.side==="SHORT"?"short":""}">
+              <div class="symbol">\${c.symbol}</div>
+              <div class="\${c.side==="LONG"?"long":"short-text"}">\${c.side}</div>
+              <div>Entry: \${c.price.toFixed(4)}</div>
+              <div>TP: \${c.tp.toFixed(4)}</div>
+              <div>SL: \${c.sl.toFixed(4)}</div>
+              <div>Score: \${c.score}</div>
+            </div>
+          \`;
+        });
+
+        document.getElementById("list").innerHTML = html;
+
+      }catch(e){
+        document.getElementById("list").innerHTML = "❌ Lỗi load dữ liệu";
+      }
     }
-  }
 
-  async function scanNow(){
-    await fetch("/scan");
+    async function scanNow(){
+      document.getElementById("list").innerHTML = "⏳ Đang scan...";
+      await fetch("/scan");
+      load();
+    }
+
     load();
-  }
+    setInterval(load,5000);
 
-  load();
-  setInterval(load,5000);
-  </script>
+    </script>
 
   </body>
   </html>
   `);
 });
-
 // ===== SERVER =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("RUNNING PORT", PORT));
