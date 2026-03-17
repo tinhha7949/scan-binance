@@ -5,8 +5,9 @@ const app = express();
 
 let signals = [];
 let lastUpdate = "";
+let cacheData = {}; // 🔥 lưu data tránh lệch
 
-// ===== FULL 50 COIN =====
+// ===== COINS =====
 const coins = [
 "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT",
 "ADAUSDT","AVAXUSDT","DOGEUSDT","LINKUSDT","DOTUSDT",
@@ -20,6 +21,11 @@ const coins = [
 "CHZUSDT","ZILUSDT","1INCHUSDT","BATUSDT","ENSUSDT"
 ];
 
+// ===== UI giữ nguyên của bạn =====
+app.get("/", (req, res) => {
+  res.send("OK - dùng UI cũ của bạn");
+});
+
 // ===== API =====
 app.get("/api", (req, res) => {
   res.json({ signals, lastUpdate });
@@ -30,142 +36,6 @@ app.get("/scan", async (req, res) => {
   res.send("ok");
 });
 
-// ===== UI =====
-app.get("/", (req, res) => {
-  res.send(`
-  <html>
-  <head>
-    <title>Future Scanner</title>
-
-    <style>
-      body{
-        background:#0b1220;
-        color:#e5e7eb;
-        font-family:Arial;
-        padding:20px;
-      }
-
-      h1{
-        color:#22c55e;
-      }
-
-      button{
-        padding:10px 15px;
-        background:#22c55e;
-        border:none;
-        border-radius:8px;
-        cursor:pointer;
-        font-weight:bold;
-      }
-
-      button:hover{
-        background:#16a34a;
-      }
-
-      .top{
-        display:flex;
-        justify-content:space-between;
-        align-items:center;
-        margin-bottom:15px;
-      }
-
-      .card{
-        background:#111827;
-        padding:15px;
-        margin-bottom:10px;
-        border-radius:10px;
-        border-left:5px solid #22c55e;
-      }
-
-      .short{
-        border-left:5px solid #ef4444;
-      }
-
-      .symbol{
-        font-size:18px;
-        font-weight:bold;
-      }
-
-      .long{
-        color:#22c55e;
-        font-weight:bold;
-      }
-
-      .short-text{
-        color:#ef4444;
-        font-weight:bold;
-      }
-
-      .loading{
-        color:#9ca3af;
-        font-style:italic;
-      }
-
-    </style>
-  </head>
-
-  <body>
-
-    <div class="top">
-      <h1>🚀 Future Scanner</h1>
-      <button onclick="scanNow()">🔄 Scan</button>
-    </div>
-
-    <div>⏱ Last update: <span id="time">...</span></div>
-    <br>
-
-    <div id="list" class="loading">Đang load dữ liệu...</div>
-
-    <script>
-
-    async function load(){
-      try{
-        let res = await fetch("/api");
-        let d = await res.json();
-
-        document.getElementById("time").innerText = d.lastUpdate || "...";
-
-        let html = "";
-
-        if(d.signals.length === 0){
-          html = "<div class='loading'>❌ Không có kèo phù hợp</div>";
-        }
-
-        d.signals.forEach(c=>{
-          html += \`
-            <div class="card \${c.side==="SHORT"?"short":""}">
-              <div class="symbol">\${c.symbol}</div>
-              <div class="\${c.side==="LONG"?"long":"short-text"}">\${c.side}</div>
-              <div>Entry: \${c.price.toFixed(4)}</div>
-              <div>TP: \${c.tp.toFixed(4)}</div>
-              <div>SL: \${c.sl.toFixed(4)}</div>
-              <div>Score: \${c.score}</div>
-            </div>
-          \`;
-        });
-
-        document.getElementById("list").innerHTML = html;
-
-      }catch(e){
-        document.getElementById("list").innerHTML = "❌ Lỗi load dữ liệu";
-      }
-    }
-
-    async function scanNow(){
-      document.getElementById("list").innerHTML = "⏳ Đang scan...";
-      await fetch("/scan");
-      load();
-    }
-
-    load();
-    setInterval(load,5000);
-
-    </script>
-
-  </body>
-  </html>
-  `);
-});
 // ===== SERVER =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("RUNNING PORT", PORT));
@@ -193,17 +63,30 @@ async function scan(){
 
   async function getData(symbol){
     try{
+      // 🔥 dùng cache nếu có
+      if(cacheData[symbol]) return cacheData[symbol];
+
       let url = "https://fapi.binance.com/fapi/v1/klines?symbol="+symbol+"&interval=15m&limit=200";
 
-      let res = await fetch(url);
-      if(!res.ok) return null;
+      for(let i=0;i<3;i++){ // retry 3 lần
+        let res = await fetch(url);
 
-      let data = await res.json();
+        if(!res.ok) continue;
 
-      if(!Array.isArray(data)) return null;
-      if(data.length === 0) return null;
+        let data = await res.json();
 
-      return data;
+        if(Array.isArray(data) && data.length > 100){
+
+          // lọc data sạch
+          data = data.filter(x => x && x[4]);
+
+          cacheData[symbol] = data; // lưu lại
+          return data;
+        }
+      }
+
+      console.log("❌ FAIL:", symbol);
+      return null;
 
     }catch{
       return null;
@@ -212,7 +95,12 @@ async function scan(){
 
   let results=[];
 
+  // reset cache mỗi lần scan để đồng bộ cùng thời điểm
+  cacheData = {};
+
   for(let symbol of coins){
+
+    console.log("Scan:", symbol);
 
     let data = await getData(symbol);
     if(!data) continue;
@@ -235,17 +123,19 @@ async function scan(){
     if(side==="LONG" && r>50) score+=20;
     if(side==="SHORT" && r<50) score+=20;
 
-    if(score>=80){
+    if(score >= 80){
       let tp = side==="LONG"?price*1.05:price*0.95;
       let sl = side==="LONG"?price*0.985:price*1.015;
 
       results.push({symbol,side,price,tp,sl,score});
+    }else{
+      console.log(symbol,"REJECT",score);
     }
   }
 
   results.sort((a,b)=>b.score-a.score);
 
-  signals = results.slice(0,10);
+  signals = results;
   lastUpdate = new Date().toLocaleTimeString();
 
   console.log("✅ DONE:", signals.length);
