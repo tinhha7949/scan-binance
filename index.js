@@ -6,74 +6,110 @@ const app = express();
 let signals = [];
 let lastUpdate = "";
 
-// API trả dữ liệu
+// ================= API =================
 app.get("/api", (req, res) => {
   res.json({ signals, lastUpdate });
 });
 
-// UI đẹp
+// scan thủ công
+app.get("/scan", async (req, res) => {
+  await scan();
+  res.send("ok");
+});
+
+// ================= UI =================
 app.get("/", (req, res) => {
   res.send(`
   <html>
   <head>
     <title>Future Scanner Pro</title>
+
     <style>
       body {
+        margin: 0;
+        font-family: Arial;
         background: #0f172a;
         color: #e2e8f0;
-        font-family: Arial;
-        padding: 20px;
       }
-      h1 {
-        color: #38bdf8;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 20px;
-      }
-      th, td {
-        padding: 10px;
-        text-align: center;
-      }
-      th {
-        background: #1e293b;
-      }
-      tr {
+
+      .header {
+        background: #020617;
+        padding: 15px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
         border-bottom: 1px solid #1e293b;
       }
-      .long {
-        color: #22c55e;
+
+      .title {
+        font-size: 20px;
+        color: #38bdf8;
+      }
+
+      .btn {
+        background: #38bdf8;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        cursor: pointer;
         font-weight: bold;
       }
-      .short {
-        color: #ef4444;
-        font-weight: bold;
+
+      .btn:hover {
+        background: #0ea5e9;
       }
+
+      .container {
+        padding: 20px;
+      }
+
+      .status {
+        margin-bottom: 10px;
+        color: #94a3b8;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill,minmax(250px,1fr));
+        gap: 15px;
+      }
+
       .card {
         background: #020617;
         padding: 15px;
         border-radius: 10px;
+        border: 1px solid #1e293b;
       }
+
+      .coin {
+        font-size: 18px;
+        font-weight: bold;
+      }
+
+      .long { color: #22c55e; }
+      .short { color: #ef4444; }
+
+      .score {
+        margin-top: 5px;
+        font-size: 14px;
+        color: #94a3b8;
+      }
+
     </style>
   </head>
+
   <body>
-    <h1>🚀 FUTURE SCANNER PRO</h1>
-    <div class="card">
-      <div>Last update: <span id="time">...</span></div>
-      <table>
-        <thead>
-          <tr>
-            <th>Coin</th>
-            <th>Side</th>
-            <th>Entry</th>
-            <th>TP</th>
-            <th>SL</th>
-            <th>Score</th>
-          </tr>
-        </thead>
-        <tbody id="data"></tbody>
-      </table>
+
+    <div class="header">
+      <div class="title">🚀 Future Scanner</div>
+      <button class="btn" onclick="scanNow()">Scan lại</button>
+    </div>
+
+    <div class="container">
+      <div class="status" id="status">Ready...</div>
+      <div class="status">Last update: <span id="time">...</span></div>
+
+      <div class="grid" id="list"></div>
     </div>
 
     <script>
@@ -84,35 +120,46 @@ app.get("/", (req, res) => {
         document.getElementById("time").innerText = d.lastUpdate;
 
         let html = "";
+
         d.signals.forEach(c=>{
           html += \`
-          <tr>
-            <td>\${c.symbol}</td>
-            <td class="\${c.side==="LONG"?"long":"short"}">\${c.side}</td>
-            <td>\${c.price.toFixed(4)}</td>
-            <td>\${c.tp.toFixed(4)}</td>
-            <td>\${c.sl.toFixed(4)}</td>
-            <td>\${c.score}</td>
-          </tr>
+          <div class="card">
+            <div class="coin">\${c.symbol}</div>
+            <div class="\${c.side==="LONG"?"long":"short"}">\${c.side}</div>
+            <div>Entry: \${c.price.toFixed(4)}</div>
+            <div>TP: \${c.tp.toFixed(4)}</div>
+            <div>SL: \${c.sl.toFixed(4)}</div>
+            <div class="score">Score: \${c.score}</div>
+          </div>
           \`;
         });
 
-        document.getElementById("data").innerHTML = html;
+        document.getElementById("list").innerHTML = html;
+        document.getElementById("status").innerText = "✅ Done";
+      }
+
+      async function scanNow(){
+        document.getElementById("status").innerText = "⚡ Đang scan...";
+
+        await fetch("/scan");
+
+        await load();
       }
 
       load();
       setInterval(load, 5000);
     </script>
+
   </body>
   </html>
   `);
 });
 
+// ================= SERVER =================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Server chạy cổng", PORT));
 
 // ================= BOT =================
-
 async function scan(){
 
   console.log("🚀 SCAN...");
@@ -144,8 +191,8 @@ async function scan(){
 
   async function getData(symbol){
     try{
-      let url= `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=200`;
-      let res=await fetch(url);
+      let url = \`https://fapi.binance.com/fapi/v1/klines?symbol=\${symbol}&interval=15m&limit=200\`;
+      let res = await fetch(url);
       if(!res.ok) return null;
       return await res.json();
     }catch{
@@ -196,6 +243,6 @@ async function scan(){
   lastUpdate = new Date().toLocaleTimeString();
 }
 
-// chạy liên tục
+// chạy auto
 scan();
 setInterval(scan, 300000);
