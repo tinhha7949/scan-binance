@@ -61,7 +61,6 @@ async function getData(symbol, interval, limit){
                 let data = await res.json()
 
                 if(Array.isArray(data) && data.length > 50){
-                    console.log("✅ DATA:", url.includes("fapi") ? "FUTURES" : "VISION")
                     return data
                 }
 
@@ -131,8 +130,8 @@ async function coreLogic(data15, data1h){
     if(breakoutDown && !trendShort) return null
 
     // ===== RETEST =====
-    let retestLong = Math.abs(price - prevHigh) / price < 0.0015
-    let retestShort = Math.abs(price - prevLow) / price < 0.0015
+    let retestLong = Math.abs(price - prevHigh) / price < 0.003
+    let retestShort = Math.abs(price - prevLow) / price < 0.
 
     if(breakoutUp && !retestLong) return null
     if(breakoutDown && !retestShort) return null
@@ -150,8 +149,8 @@ async function coreLogic(data15, data1h){
     let lastClose = closes.at(-1)
     let prevClose = closes.at(-2)
 
-    if(breakoutUp && !(lastClose > prevHigh && prevClose <= prevHigh)) return null
-    if(breakoutDown && !(lastClose < prevLow && prevClose >= prevLow)) return null
+    if(breakoutUp && !(lastClose > prevHigh)) return null
+    if(breakoutDown && !(lastClose < prevLow)) return null
 
     // ===== ENTRY =====
     let side = breakoutUp ? "LONG" : "SHORT"
@@ -246,7 +245,8 @@ RR: ${rr.toFixed(2)}
             entry: r.entry,
             tp: r.tp,
             sl: r.sl,
-            time: Date.now()
+            time: Date.now(),
+            beMoved: false
         }
 
         activeTrades.push(trade)
@@ -295,6 +295,59 @@ PRICE: ${price}`
             activeTrades.splice(i,1)
     continue
         }
+
+        // ===== BREAK EVEN =====
+let risk = Math.abs(t.entry - t.sl)
+
+let beTrigger = t.side === "LONG"
+    ? t.entry + risk * 0.5
+    : t.entry - risk * 0.5
+
+if(!t.beMoved){
+    if(
+        (t.side === "LONG" && price >= beTrigger) ||
+        (t.side === "SHORT" && price <= beTrigger)
+    ){
+        t.sl = t.entry
+        t.beMoved = true
+
+        await sendTelegram(`🔒 BE ACTIVATED
+${t.side}
+SL moved to: ${t.sl.toFixed(2)}`)
+    }
+}
+
+// ===== TRAILING SL =====
+if(t.beMoved){
+
+    let trail = risk * 0.8 // 0.5
+
+    if(t.side === "LONG"){
+        let newSL = price - trail
+
+        if(newSL > t.sl){
+            t.sl = newSL
+
+            await sendTelegram(`📈 TRAILING SL
+LONG
+New SL: ${t.sl.toFixed(2)}
+Price: ${price}`)
+        }
+    }
+
+    if(t.side === "SHORT"){
+        let newSL = price + trail
+
+        if(newSL < t.sl){
+            t.sl = newSL
+
+            await sendTelegram(`📉 TRAILING SL
+SHORT
+New SL: ${t.sl.toFixed(2)}
+Price: ${price}`)
+        }
+    }
+}
 
         // ===== TP / SL =====
         if(!done){
