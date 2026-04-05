@@ -61,7 +61,6 @@ async function getData(symbol, interval, limit){
                 let data = await res.json()
 
                 if(Array.isArray(data) && data.length > 50){
-                    console.log("✅ DATA:")
                     return data
                 }
 
@@ -141,21 +140,43 @@ async function coreLogic(data15, data1h){
     let lastCandleRange = highs.at(-1) - lows.at(-1)
     if(lastCandleRange > atrVal * 2.5) return null
 
+    // ===== CHỐNG ĐU GIÁ =====
+    let distance = Math.abs(price - (breakoutUp ? prevHigh : prevLow)) / price
+    if(distance > 0.0025) return null
+
+    // ===== ENTRY =====
+    // ===== CONFIRM BREAKOUT =====
+    let lastClose = closes.at(-1)
+    let prevClose = closes.at(-2)
+
+    if(breakoutUp && !(lastClose > prevHigh && prevClose <= prevHigh)) return null
+    if(breakoutDown && !(lastClose < prevLow && prevClose >= prevLow)) return null
+
     // ===== ENTRY =====
     let side = breakoutUp ? "LONG" : "SHORT"
-    let entry = breakoutUp ? prevHigh : prevLow
+    let entry = price
+
+    // ===== SL (theo structure) =====
+    let swingLow = Math.min(...lows.slice(-10))
+    let swingHigh = Math.max(...highs.slice(-10))
 
     let sl = breakoutUp
-        ? prevLow - atrVal * 0.3
-        : prevHigh + atrVal * 0.3
+    ? swingLow - atrVal * 0.2
+    : swingHigh + atrVal * 0.2
 
     let risk = Math.abs(entry - sl)
+    if(risk === 0) return null
 
-    // ❗ tăng RR lên để lọc kèo rác
+    // ===== TP (theo range market) =====
+    let range25 = Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))
+
     let tp = breakoutUp
-        ? entry + risk * 1.5
-        : entry - risk * 1.5
+    ? entry + range25 * 0.8
+    : entry - range25 * 0.8
 
+    // ===== RR CHECK =====
+    let rr = Math.abs(tp - entry) / risk
+    if(rr < 1.3) return null
     let rr = Math.abs(tp - entry) / risk
     if(rr < 1.2) return null
 
@@ -205,10 +226,6 @@ async function scanner(){
         // ===== RR CHECK =====
         let risk = Math.abs(r.entry - r.sl)
         if(!risk || risk === 0) return
-
-        let rr = r.side === "LONG"
-            ? (r.tp - r.entry) / risk
-            : (r.entry - r.tp) / risk
 
         // ===== TELE =====
         let msg = `🔥 BTC SIGNAL
@@ -276,7 +293,8 @@ PnL: ${pnl.toFixed(2)}%
 PRICE: ${price}`
 
             await sendTelegram(msg)
-            done = true
+            activeTrades.splice(i,1)
+    continue
         }
 
         // ===== TP / SL =====
