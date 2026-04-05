@@ -230,7 +230,9 @@ PRICE: ${price}`
     }
 }
 // ================= LOOP =================
-setInterval(scanner, 300000)
-setInterval(checkTrades, 60000)
+setInterval(()=>scanner(),300000)
+setInterval(()=>checkTrades(),60000)
+
+        scanner()
 
 scanner()
