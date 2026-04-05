@@ -61,6 +61,7 @@ async function getData(symbol, interval, limit){
                 let data = await res.json()
 
                 if(Array.isArray(data) && data.length > 50){
+                    console.log("✅ DATA:", url.includes("fapi") ? "FUTURES" : "VISION")
                     return data
                 }
 
@@ -175,8 +176,6 @@ async function coreLogic(data15, data1h){
     : entry - range25 * 0.8
 
     // ===== RR CHECK =====
-    let rr = Math.abs(tp - entry) / risk
-    if(rr < 1.3) return null
     let rr = Math.abs(tp - entry) / risk
     if(rr < 1.2) return null
 
