@@ -166,7 +166,7 @@ async function coreLogic(data15, data1h){
         atr: atrVal
     }
 }
-// ================= CHECK RESULT =================
+// ================= SCANNER =================
 async function checkTrades(){
 
     if(activeTrades.length === 0) return
@@ -180,24 +180,23 @@ async function checkTrades(){
 
         let t = activeTrades[i]
 
-        let now = Date.now()
-let duration = now - t.time
+        let duration = Date.now() - t.time
 
-// 6 giờ = 21600000 ms
-if(duration > 21600000){
+        // TIMEOUT 6H
+        if(duration > 21600000){
 
-    let msg = `⏰ TIMEOUT 6H
+            let msg = `⏰ TIMEOUT 6H
 ${t.symbol}
 ${t.side}
-ENTRY: ${t.price}
+ENTRY: ${t.entry}
 SL: ${t.sl}
 TP: ${t.tp}`
 
-    await sendTelegram(msg)
+            await sendTelegram(msg)
 
-    activeTrades.splice(i,1)
-    continue
-}
+            activeTrades.splice(i,1)
+            continue
+        }
 
         let win = false
         let done = false
@@ -212,22 +211,24 @@ TP: ${t.tp}`
             if(price >= t.sl){ done=true }
         }
 
-        let timeout = Date.now() - t.time > 6 * 60 * 60 * 1000
-
-        if(done || timeout){
+        if(done){
 
             let msg = `📊 RESULT BTC
+${t.symbol}
 ${t.side}
-${win ? "✅ WIN" : "❌ LOSS"}`
+${win ? "✅ WIN" : "❌ LOSS"}
+
+ENTRY: ${t.entry}
+SL: ${t.sl}
+TP: ${t.tp}
+PRICE: ${price}`
 
             await sendTelegram(msg)
 
             activeTrades.splice(i,1)
-            
         }
     }
 }
-
 // ================= LOOP =================
 setInterval(scanner, 300000)
 setInterval(checkTrades, 60000)
