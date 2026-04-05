@@ -10,6 +10,7 @@ const RISK_PER_TRADE = 0.01
 const ACCOUNT_BALANCE = 1000
 const MIN_VOL_15M = 60000
 
+let isScanning = false
 let lastSignalTime = 0
 let activeTrades = []
 
@@ -166,7 +167,83 @@ async function coreLogic(data15, data1h){
         atr: atrVal
     }
 }
+
 // ================= SCANNER =================
+async function scanner(){
+
+    if(isScanning){
+        console.log("⛔ Skip scan trùng")
+        return
+    }
+
+    isScanning = true
+
+    try{
+        console.log("🚀 SCAN BTC...")
+
+        // ===== CHỈ 1 LỆNH BTC =====
+        if(activeTrades.length > 0){
+            console.log("⛔ Đang có lệnh, chờ kết quả")
+            return
+        }
+
+        let data15 = await getData("BTCUSDT","15m",300)
+        let data1h = await getData("BTCUSDT","1h",200)
+
+        if(!data15 || !data1h){
+            console.log("❌ Data fail")
+            return
+        }
+
+        let r = await coreLogic(data15, data1h)
+
+        if(!r){
+            console.log("❌ No signal BTC")
+            return
+        }
+
+        // ===== RR CHECK =====
+        let risk = Math.abs(r.entry - r.sl)
+        if(!risk || risk === 0) return
+
+        let rr = r.side === "LONG"
+            ? (r.tp - r.entry) / risk
+            : (r.entry - r.tp) / risk
+
+        // ===== TELE =====
+        let msg = `🔥 BTC SIGNAL
+
+${r.side}
+ENTRY: ${r.entry}
+TP: ${r.tp}
+SL: ${r.sl}
+RR: ${rr.toFixed(2)}
+`
+
+        console.log(msg)
+        await sendTelegram(msg)
+
+        // ===== SAVE TRADE (RAM) =====
+        let trade = {
+            symbol: "BTCUSDT",
+            side: r.side,
+            entry: r.entry,
+            tp: r.tp,
+            sl: r.sl,
+            time: Date.now()
+        }
+
+        activeTrades.push(trade)
+
+    }catch(e){
+        console.log("❌ scanner error:", e.message)
+    }finally{
+        isScanning = false
+    }
+}
+
+
+// ================= CHECK TRADES =================
 async function checkTrades(){
 
     if(activeTrades.length === 0) return
@@ -179,52 +256,60 @@ async function checkTrades(){
     for(let i = activeTrades.length -1; i>=0; i--){
 
         let t = activeTrades[i]
-
         let duration = Date.now() - t.time
-
-        // TIMEOUT 6H
-        if(duration > 21600000){
-
-            let msg = `⏰ TIMEOUT 6H
-${t.symbol}
-${t.side}
-ENTRY: ${t.entry}
-SL: ${t.sl}
-TP: ${t.tp}`
-
-            await sendTelegram(msg)
-
-            activeTrades.splice(i,1)
-            continue
-        }
 
         let win = false
         let done = false
+        let exitPrice = price
 
-        if(t.side === "LONG"){
-            if(price >= t.tp){ win=true; done=true }
-            if(price <= t.sl){ done=true }
-        }
+        // ===== TIMEOUT 6H =====
+        if(duration > 21600000){
 
-        if(t.side === "SHORT"){
-            if(price <= t.tp){ win=true; done=true }
-            if(price >= t.sl){ done=true }
-        }
+            let pnl = t.side === "LONG"
+                ? ((price - t.entry) / t.entry) * 100
+                : ((t.entry - price) / t.entry) * 100
 
-        if(done){
-
-            let msg = `📊 RESULT BTC
-${t.symbol}
+            let msg = `⏰ BTC TIMEOUT 6H
 ${t.side}
-${win ? "✅ WIN" : "❌ LOSS"}
 
-ENTRY: ${t.entry}
-SL: ${t.sl}
-TP: ${t.tp}
+PnL: ${pnl.toFixed(2)}%
 PRICE: ${price}`
 
             await sendTelegram(msg)
+            done = true
+        }
 
+        // ===== TP / SL =====
+        if(!done){
+
+            if(t.side === "LONG"){
+                if(price >= t.tp){ win=true; done=true; exitPrice = t.tp }
+                if(price <= t.sl){ done=true; exitPrice = t.sl }
+            }
+
+            if(t.side === "SHORT"){
+                if(price <= t.tp){ win=true; done=true; exitPrice = t.tp }
+                if(price >= t.sl){ done=true; exitPrice = t.sl }
+            }
+
+            if(done){
+
+                let pnl = t.side === "LONG"
+                    ? ((exitPrice - t.entry) / t.entry) * 100
+                    : ((t.entry - exitPrice) / t.entry) * 100
+
+                let msg = `📊 BTC RESULT
+${t.side} ${win ? "✅ WIN" : "❌ LOSS"}
+
+PnL: ${pnl.toFixed(2)}%
+PRICE: ${price}`
+
+                await sendTelegram(msg)
+            }
+        }
+
+        // ===== XÓA LỆNH =====
+        if(done){
             activeTrades.splice(i,1)
         }
     }
@@ -234,5 +319,3 @@ setInterval(()=>scanner(),300000)
 setInterval(()=>checkTrades(),60000)
 
         scanner()
-
-scanner()
