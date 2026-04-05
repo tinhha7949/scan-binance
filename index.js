@@ -61,7 +61,7 @@ async function getData(symbol, interval, limit){
                 let data = await res.json()
 
                 if(Array.isArray(data) && data.length > 50){
-                    console.log("✅ DATA:", url.includes("fapi") ? "FUTURES" : "VISION")
+                    console.log("✅ DATA:")
                     return data
                 }
 
