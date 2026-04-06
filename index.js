@@ -347,7 +347,7 @@ if(!data1m){
         }
         
         // ======== ENTRY 1M ========
-        if(r.type !== "MOMENTUM"){
+       if(r.type !== "MOMENTUM" && data1m){
     r.entry = getBetterEntry(r, data1m)
 }
         // ======= filter tránh đu giá  =======
