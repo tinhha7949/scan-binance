@@ -43,7 +43,44 @@ function atr(data,p=14){
     }
     return trs.slice(-p).reduce((a,b)=>a+b,0)/p
 }
+// ============= DATA ENTRY 1M =============
+function getBetterEntry(r, data1m){
 
+    let closes = data1m.map(x=>+x[4])
+    let highs  = data1m.map(x=>+x[2])
+    let lows   = data1m.map(x=>+x[3])
+
+    let price = closes.at(-1)
+
+    // ===== LONG =====
+    if(r.side === "LONG"){
+
+        // tìm đáy gần nhất (pullback nhẹ)
+        let recentLow = Math.min(...lows.slice(-5))
+
+        // nếu đang hồi xuống → vào tại giá hiện tại
+        if(price <= r.entry){
+            return price
+        }
+
+        // nếu đã chạy → chờ hồi
+        return recentLow
+    }
+
+    // ===== SHORT =====
+    if(r.side === "SHORT"){
+
+        let recentHigh = Math.max(...highs.slice(-5))
+
+        if(price >= r.entry){
+            return price
+        }
+
+        return recentHigh
+    }
+
+    return r.entry
+}
 // ================= DATA =================
 async function getData(symbol, interval, limit){
 
@@ -89,7 +126,7 @@ async function coreLogic(data15, data1h){
     let volNow = volumes.at(-1)
 
     if(volAvg < MIN_VOL_15M) return null
-    if(volNow < volAvg * 1.2) return null
+    if(volNow < volAvg * 1.1) return null // giảm nhẹ
 
     // ===== EMA =====
     let ema20 = ema(closes.slice(-60),20)
@@ -98,20 +135,19 @@ async function coreLogic(data15, data1h){
     let ema20_1h = ema(closes1h.slice(-60),20)
     let ema50_1h = ema(closes1h.slice(-120),50)
 
-    // ===== TREND STRENGTH =====
+    // ===== TREND =====
     let trendLTF = Math.abs(ema20 - ema50) / price
     let trendHTF = Math.abs(ema20_1h - ema50_1h) / price
 
-    // ❗ BẮT BUỘC có trend
     if(trendLTF < 0.0015 || trendHTF < 0.0015) return null
 
     // ===== ATR =====
     let atrVal = atr(data15.slice(-100))
-    if(atrVal / price < 0.0025) return null
+    if(atrVal / price < 0.002) return null
 
     // ===== COMPRESSION =====
     let range = (Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))) / price
-    if(range > 0.018) return null
+    if(range > 0.02) return null // nới nhẹ
 
     // ===== BREAKOUT =====
     let prevHigh = Math.max(...highs.slice(-25,-1))
@@ -122,67 +158,68 @@ async function coreLogic(data15, data1h){
 
     if(!breakoutUp && !breakoutDown) return null
 
-    // ===== TREND FILTER CHẶT =====
+    // ===== TREND FILTER =====
     let trendLong = ema20 > ema50 && ema20_1h > ema50_1h
     let trendShort = ema20 < ema50 && ema20_1h < ema50_1h
 
     if(breakoutUp && !trendLong) return null
     if(breakoutDown && !trendShort) return null
 
-    // ===== RETEST =====
+    // ===== RETEST + BREAK MẠNH =====
     let retestLong = Math.abs(price - prevHigh) / price < 0.003
-    let retestShort = Math.abs(price - prevLow) / price < 0.
+    let retestShort = Math.abs(price - prevLow) / price < 0.003
 
-    if(breakoutUp && !retestLong) return null
-    if(breakoutDown && !retestShort) return null
+    let strongBreakUp = (price - prevHigh) / price > 0.0015
+    let strongBreakDown = (prevLow - price) / price > 0.0015
 
-    // ===== ANTI FAKE BREAKOUT =====
-    let lastCandleRange = highs.at(-1) - lows.at(-1)
-    if(lastCandleRange > atrVal * 2.5) return null
+    if(breakoutUp && !retestLong && !strongBreakUp) return null
+    if(breakoutDown && !retestShort && !strongBreakDown) return null
 
-    // ===== CHỐNG ĐU GIÁ =====
+    // ===== ANTI FAKE BREAK =====
+    let lastRange = highs.at(-1) - lows.at(-1)
+    if(lastRange > atrVal * 2.5) return null
+
+    // ===== KHÔNG ĐU QUÁ XA =====
     let distance = Math.abs(price - (breakoutUp ? prevHigh : prevLow)) / price
-    if(distance > 0.0025) return null
+    if(distance > 0.006) return null // nới
 
-    // ===== ENTRY =====
-    // ===== CONFIRM BREAKOUT =====
+    // ===== CONFIRM CLOSE =====
     let lastClose = closes.at(-1)
-    let prevClose = closes.at(-2)
 
-    if(breakoutUp && !(lastClose > prevHigh)) return null
-    if(breakoutDown && !(lastClose < prevLow)) return null
+    if(breakoutUp && lastClose <= prevHigh) return null
+    if(breakoutDown && lastClose >= prevLow) return null
 
     // ===== ENTRY =====
     let side = breakoutUp ? "LONG" : "SHORT"
     let entry = price
 
-    // ===== SL (theo structure) =====
+    // ===== SL =====
     let swingLow = Math.min(...lows.slice(-10))
     let swingHigh = Math.max(...highs.slice(-10))
 
     let sl = breakoutUp
-    ? swingLow - atrVal * 0.2
-    : swingHigh + atrVal * 0.2
+        ? swingLow - atrVal * 0.2
+        : swingHigh + atrVal * 0.2
 
     let risk = Math.abs(entry - sl)
     if(risk === 0) return null
 
-    // ===== TP (theo range market) =====
+    // ===== TP =====
     let range25 = Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))
 
     let tp = breakoutUp
-    ? entry + range25 * 0.8
-    : entry - range25 * 0.8
+        ? entry + range25 * 0.8
+        : entry - range25 * 0.8
 
-    // ===== RR CHECK =====
     let rr = Math.abs(tp - entry) / risk
-    if(rr < 1.2) return null
+    if(rr < RR_THRESHOLD) return null
 
     return {
         side,
         entry,
         sl,
         tp,
+        rr,
         atr: atrVal
     }
 }
@@ -208,6 +245,8 @@ async function scanner(){
 
         let data15 = await getData("BTCUSDT","15m",300)
         let data1h = await getData("BTCUSDT","1h",200)
+        let data1m = await getData("BTCUSDT","1m",50)
+    if(!data1m) return
 
         if(!data15 || !data1h){
             console.log("❌ Data fail")
@@ -220,6 +259,18 @@ async function scanner(){
             console.log("❌ No signal BTC")
             return
         }
+        
+        // ======== ENTRY 1M ========
+        let betterEntry = getBetterEntry(r, data1m)
+        r.entry = betterEntry
+        // ======= filter tránh đu giá  =======
+        let distance = Math.abs(r.entry - r.sl) / r.entry
+
+// tránh entry quá xa
+if(distance > 0.005){
+    console.log("❌ Entry quá xa")
+    return
+}
 
         // ===== RR CHECK =====
         let risk = Math.abs(r.entry - r.sl)
@@ -232,7 +283,7 @@ ${r.side}
 ENTRY: ${r.entry}
 TP: ${r.tp}
 SL: ${r.sl}
-RR: ${rr.toFixed(2)}
+RR: ${r.rr.toFixed(2)}
 `
 
         console.log(msg)
