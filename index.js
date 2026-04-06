@@ -6,7 +6,7 @@ const LIMIT_15M = 300
 const LIMIT_1H  = 200
 
 const RR_THRESHOLD = 1.2
-const RISK_PER_TRADE = 0.01
+const RISK_PER_TRADE = 0.005
 const ACCOUNT_BALANCE = 1000
 const MIN_VOL_15M = 60000
 
@@ -59,9 +59,9 @@ function getBetterEntry(r, data1m){
         let recentLow = Math.min(...lows.slice(-5))
 
         // nếu đang hồi xuống → vào tại giá hiện tại
-        if(price <= r.entry){
-            return price
-        }
+        if(price <= r.entry * 1.001){
+    return price
+}
 
         // nếu đã chạy → chờ hồi
         return recentLow
@@ -72,9 +72,9 @@ function getBetterEntry(r, data1m){
 
         let recentHigh = Math.max(...highs.slice(-5))
 
-        if(price >= r.entry){
-            return price
-        }
+        if(price >= r.entry * 0.999){
+    return price
+}
 
         return recentHigh
     }
@@ -134,6 +134,9 @@ async function coreLogic(data15, data1h){
 
     let ema20_1h = ema(closes1h.slice(-60),20)
     let ema50_1h = ema(closes1h.slice(-120),50)
+     // ===== TREND FILTER =====
+    let trendLong = ema20 > ema50 && ema20_1h > ema50_1h
+    let trendShort = ema20 < ema50 && ema20_1h < ema50_1h
 
     // ===== TREND =====
     let trendLTF = Math.abs(ema20 - ema50) / price
@@ -143,11 +146,11 @@ async function coreLogic(data15, data1h){
 
     // ===== ATR =====
     let atrVal = atr(data15.slice(-100))
-    if(atrVal / price < 0.002) return null
+    if(atrVal / price < 0.0018) return null
 
     // ===== COMPRESSION =====
     let range = (Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))) / price
-    if(range > 0.02) return null // nới nhẹ
+    if(range > 0.03) return null // nới nhẹ
 
     // ===== BREAKOUT =====
     let prevHigh = Math.max(...highs.slice(-25,-1))
@@ -158,12 +161,56 @@ async function coreLogic(data15, data1h){
 
     if(!breakoutUp && !breakoutDown) return null
 
-    // ===== TREND FILTER =====
-    let trendLong = ema20 > ema50 && ema20_1h > ema50_1h
-    let trendShort = ema20 < ema50 && ema20_1h < ema50_1h
-
     if(breakoutUp && !trendLong) return null
     if(breakoutDown && !trendShort) return null
+
+    // ===== MOMENTUM MODE =====
+let momentum = (price - closes.at(-5)) / price
+let momentumVol = volNow > volAvg * 1.2
+
+// LONG
+if(breakoutUp && trendLong && momentum > 0.0045 && momentumVol){
+    let entry = price
+    let sl = entry - atrVal * 1.2
+    let tp = entry + atrVal * 3.5
+
+    let risk = Math.abs(entry - sl)
+    let rr = Math.abs(tp - entry) / risk
+
+    if(rr >= 1.2){
+        return {
+            side: "LONG",
+            entry,
+            sl,
+            tp,
+            rr,
+            atr: atrVal,
+            type: "MOMENTUM"
+        }
+    }
+}
+
+// SHORT
+if(breakoutDown && trendShort && momentum < -0.0045 && momentumVol){
+    let entry = price
+    let sl = entry + atrVal * 1.2
+    let tp = entry - atrVal * 3.5
+
+    let risk = Math.abs(entry - sl)
+    let rr = Math.abs(tp - entry) / risk
+
+    if(rr >= 1.2){
+        return {
+            side: "SHORT",
+            entry,
+            sl,
+            tp,
+            rr,
+            atr: atrVal,
+            type: "MOMENTUM"
+        }
+    }
+}
 
     // ===== RETEST + BREAK MẠNH =====
     let retestLong = Math.abs(price - prevHigh) / price < 0.003
@@ -181,7 +228,7 @@ async function coreLogic(data15, data1h){
 
     // ===== KHÔNG ĐU QUÁ XA =====
     let distance = Math.abs(price - (breakoutUp ? prevHigh : prevLow)) / price
-    if(distance > 0.006) return null // nới
+    if(distance > 0.012) return null // nới
 
     // ===== CONFIRM CLOSE =====
     let lastClose = closes.at(-1)
@@ -208,8 +255,8 @@ async function coreLogic(data15, data1h){
     let range25 = Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))
 
     let tp = breakoutUp
-        ? entry + range25 * 0.8
-        : entry - range25 * 0.8
+        ? entry + range25 * 1.0
+        : entry - range25 * 1.0
 
     let rr = Math.abs(tp - entry) / risk
     if(rr < RR_THRESHOLD) return null
@@ -236,6 +283,11 @@ async function scanner(){
 
     try{
         console.log("🚀 SCAN BTC...")
+        if(Date.now() - lastSignalTime < 900000){
+    console.log("⏳ Đợi cooldown...")
+    isScanning = false
+    return
+}
 
         // ===== CHỈ 1 LỆNH BTC =====
         if(activeTrades.length > 0){
@@ -261,13 +313,14 @@ async function scanner(){
         }
         
         // ======== ENTRY 1M ========
-        let betterEntry = getBetterEntry(r, data1m)
-        r.entry = betterEntry
+        if(r.type !== "MOMENTUM"){
+    r.entry = getBetterEntry(r, data1m)
+}
         // ======= filter tránh đu giá  =======
         let distance = Math.abs(r.entry - r.sl) / r.entry
 
 // tránh entry quá xa
-if(distance > 0.005){
+if(distance > 0.02){ // nới nhẹ
     console.log("❌ Entry quá xa")
     return
 }
@@ -288,7 +341,8 @@ RR: ${r.rr.toFixed(2)}
 
         console.log(msg)
         await sendTelegram(msg)
-
+        lastSignalTime = Date.now()
+    
         // ===== SAVE TRADE (RAM) =====
         let trade = {
             symbol: "BTCUSDT",
@@ -351,8 +405,8 @@ PRICE: ${price}`
 let risk = Math.abs(t.entry - t.sl)
 
 let beTrigger = t.side === "LONG"
-    ? t.entry + risk * 0.5
-    : t.entry - risk * 0.5
+    ? t.entry + risk * 0.7
+    : t.entry - risk * 0.7
 
 if(!t.beMoved){
     if(
@@ -371,7 +425,7 @@ SL moved to: ${t.sl.toFixed(2)}`)
 // ===== TRAILING SL =====
 if(t.beMoved){
 
-    let trail = risk * 0.8 // 0.5
+    let trail = Math.abs(price - t.entry) * 0.5
 
     if(t.side === "LONG"){
         let newSL = price - trail
