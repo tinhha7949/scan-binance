@@ -126,7 +126,7 @@ async function coreLogic(data15, data1h){
     let volNow = volumes.at(-1)
 
     if(volAvg < MIN_VOL_15M) return null
-    if(volNow < volAvg * 1.1) return null // giảm nhẹ
+    if(volNow < volAvg * 1.0) return null // giảm nhẹ
 
     // ===== EMA =====
     let ema20 = ema(closes.slice(-60),20)
@@ -142,7 +142,7 @@ async function coreLogic(data15, data1h){
     let trendLTF = Math.abs(ema20 - ema50) / price
     let trendHTF = Math.abs(ema20_1h - ema50_1h) / price
 
-    if(trendLTF < 0.0015 || trendHTF < 0.0015) return null
+    if(trendLTF < 0.001 || trendHTF < 0.001) return null
 
     // ===== ATR =====
     let atrVal = atr(data15.slice(-100))
@@ -169,7 +169,7 @@ let momentum = (price - closes.at(-5)) / price
 let momentumVol = volNow > volAvg * 1.2
 
 // LONG
-if(breakoutUp && trendLong && momentum > 0.0045 && momentumVol){
+if(breakoutUp && trendLong && momentum > 0.003 && momentumVol){
     let entry = price
     let sl = entry - atrVal * 1.2
     let tp = entry + atrVal * 3.5
@@ -191,7 +191,7 @@ if(breakoutUp && trendLong && momentum > 0.0045 && momentumVol){
 }
 
 // SHORT
-if(breakoutDown && trendShort && momentum < -0.0045 && momentumVol){
+if(breakoutDown && trendShort && momentum < -0.003 && momentumVol){
     let entry = price
     let sl = entry + atrVal * 1.2
     let tp = entry - atrVal * 3.5
@@ -228,13 +228,13 @@ if(breakoutDown && trendShort && momentum < -0.0045 && momentumVol){
 
     // ===== KHÔNG ĐU QUÁ XA =====
     let distance = Math.abs(price - (breakoutUp ? prevHigh : prevLow)) / price
-    if(distance > 0.012) return null // nới
+    if(distance > 0.015) return null // nới
 
     // ===== CONFIRM CLOSE =====
     let lastClose = closes.at(-1)
 
-    if(breakoutUp && lastClose <= prevHigh) return null
-    if(breakoutDown && lastClose >= prevLow) return null
+    //if(breakoutUp && lastClose <= prevHigh) return null
+    //if(breakoutDown && lastClose >= prevLow) return null
 
     // ===== ENTRY =====
     let side = breakoutUp ? "LONG" : "SHORT"
@@ -283,7 +283,7 @@ async function scanner(){
 
     try{
         console.log("🚀 SCAN BTC...")
-        if(Date.now() - lastSignalTime < 900000){
+        if(Date.now() - lastSignalTime < 600000){ // 10 phút
     console.log("⏳ Đợi cooldown...")
     isScanning = false
     return
@@ -490,7 +490,7 @@ PRICE: ${price}`
     }
 }
 // ================= LOOP =================
-setInterval(()=>scanner(),300000)
+setInterval(()=>scanner(),60000)
 setInterval(()=>checkTrades(),60000)
 
         scanner()
