@@ -1,90 +1,30 @@
-const { MongoClient } = require("mongodb")
-
-const client = new MongoClient(process.env.MONGO_URI)
-
-let db, trades
-// ================= CONFIG =================
+// ================= SETUP =================
 const BOT_TOKEN = process.env.BOT_TOKEN
 const CHAT_ID = process.env.CHAT_ID
 
-const BOT_TOKEN_2 = process.env.BOT_TOKEN_2
-const AI_CHAT_ID = process.env.AI_CHAT_ID
+const LIMIT_15M = 300
+const LIMIT_1H  = 200
 
-const LIMIT_15M = 300 //300
-const LIMIT_1H  = 200 //100
-
-const SCORE_THRESHOLD = 90 // 110
-const EARLY_THRESHOLD = 55  // 60
-const RR_THRESHOLD = 1.2 // 1.3 hoặc 1.4 nếu muốn 
-
-const RISK_PER_TRADE = 0.01
+const RR_THRESHOLD = 1.2
+const RISK_PER_TRADE = 0.005
 const ACCOUNT_BALANCE = 1000
-const MIN_VOL_15M = 4000000 // 100000 hoặc  nếu rác
+const MIN_VOL_15M = 30000000
 
-const DEBUG_AI = false
-
-let lastUpdateId = 0
-let cachedSymbols = null
-let lastSymbolsUpdate = 0
-let lastSignalTime = {}
 let isScanning = false
-// ===== ACTIVE TRADES =====
+let lastSignalTime = 0
 let activeTrades = []
 
 // ================= TELEGRAM =================
 async function sendTelegram(msg){
     try{
         let url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`
-        let res = await fetch(url,{
+        await fetch(url,{
             method:"POST",
             headers:{"Content-Type":"application/json"},
             body: JSON.stringify({ chat_id: CHAT_ID, text: msg })
         })
-
-        let data = await res.json()
-        return data.ok   // 👈 QUAN TRỌNG
-
     }catch(e){
         console.log("❌ TELE:", e.message)
-        return false
-    }
-}
-// Telegram phụ
-async function sendTelegram2(msg){
-    try{
-        let url = `https://api.telegram.org/bot${BOT_TOKEN_2}/sendMessage`
-        let res = await fetch(url,{
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ chat_id: AI_CHAT_ID, text: msg })
-        })
-        let data = await res.json()
-        return data.ok
-
-    }catch(e){
-        console.log("❌ TELE 2:", e.message)
-        return false
-    }
-}
-
-// ================= COMMAND =================
-async function checkCommand(){
-    try{
-        let url = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${lastUpdateId+1}`
-        let res = await fetch(url)
-        let data = await res.json()
-        if(!data.result) return
-
-        for(let u of data.result){
-            lastUpdateId = u.update_id
-            if(!u.message?.text) continue
-
-            if(u.message.text === "/status"){
-                await sendTelegram("🤖 BOT đang chạy OK")
-            }
-        }
-    }catch(e){
-        console.log("⚠️ CMD:", e.message)
     }
 }
 
@@ -95,17 +35,6 @@ function ema(arr,p){
     return e
 }
 
-function rsi(arr,p=14){
-    let g=0,l=0
-    for(let i=arr.length-p;i<arr.length;i++){
-        let d=arr[i]-arr[i-1]
-        if(d>=0) g+=d
-        else l-=d
-    }
-    let rs=g/(l||1)
-    return 100-(100/(1+rs))
-}
-
 function atr(data,p=14){
     let trs=[]
     for(let i=1;i<data.length;i++){
@@ -114,77 +43,88 @@ function atr(data,p=14){
     }
     return trs.slice(-p).reduce((a,b)=>a+b,0)/p
 }
-//========== TIMEOUT ==========
-async function fetchWithTimeout(url, ms = 5000){
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), ms)
+// ============= DATA ENTRY 1M =============
+function getBetterEntry(r, data1m){
 
-    try{
-        let res = await fetch(url, { signal: controller.signal })
-        clearTimeout(timeout)
-        return res
-    }catch(e){
-        clearTimeout(timeout)
-        throw e
+    let closes = data1m.map(x=>+x[4])
+    let highs  = data1m.map(x=>+x[2])
+    let lows   = data1m.map(x=>+x[3])
+
+    let price = closes.at(-1)
+
+    // ===== LONG =====
+    if(r.side === "LONG"){
+
+    let recentLow = Math.min(...lows.slice(-5))
+
+    // ✅ nếu đang đi mạnh → vào luôn
+    if(price > r.entry * 1.0015){
+        return price
     }
+
+    // pullback nhẹ
+    if(price <= r.entry * 1.001){
+        return price
+    }
+
+    return recentLow
 }
-// ================= DATA (PRO) =================
+
+    // ===== SHORT =====
+    if(r.side === "SHORT"){
+
+    let recentHigh = Math.max(...highs.slice(-5))
+
+    if(price < r.entry * 0.9985){
+        return price
+    }
+
+    if(price >= r.entry * 0.999){
+        return price
+    }
+
+    return recentHigh
+}
+}
+// ================= DATA =================
 async function getData(symbol, interval, limit){
 
-    const urls = [
-        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-        `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-        `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-    ]
+    let is1m = interval === "1m"
+
+    const urls = is1m
+        ? [
+            // 🔥 ưu tiên spot cho 1m (ổn định hơn)
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+            `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+            `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+        ]
+        : [
+            // timeframe lớn vẫn dùng futures trước
+            `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+            `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+        ]
 
     for(let url of urls){
         for(let attempt=0; attempt<2; attempt++){
             try{
-                let res = await fetchWithTimeout(url, 5000)
-                if(!res.ok) continue
-                let data = await res.json()
-                if(Array.isArray(data) && data.length>0) return data
-            }catch(e){
-                if(attempt===1) console.log("❌ DATA FAIL:", symbol)
-            }
-        }
-    }
+                let res = await fetch(url, {
+                    headers:{"User-Agent":"Mozilla/5.0"},
+                    timeout: 5000
+                })
 
-    return null
-}
-
-// ================= SYMBOL (PRO) =================
-async function getTopSymbols(){
-
-    const urls = [
-        "https://api.binance.com/api/v3/ticker/24hr",
-        "https://data-api.binance.vision/api/v3/ticker/24hr"
-    ]
-
-    for(let url of urls){
-        for(let attempt=0; attempt<2; attempt++){
-            try{
-                let res = await fetch(url, { headers:{"User-Agent":"Mozilla/5.0"} })
                 if(!res.ok) continue
 
                 let data = await res.json()
 
-                if(Array.isArray(data) && data.length>0){
+                if(Array.isArray(data) && data.length >= limit * 0.7){
                     return data
-                        .filter(c =>
-                            c.symbol.endsWith("USDT") &&
-                            !c.symbol.includes("UP") &&
-                            !c.symbol.includes("DOWN") &&
-                            !c.symbol.includes("BUSD")
-                        )
-                    //   .filter(c => Number(c.quoteVolume) > 30000000)
-                    .sort((a,b)=> Number(b.quoteVolume) - Number(a.quoteVolume))
-                .slice(0,40)
-                        .map(c => c.symbol)
                 }
 
             }catch(e){
-                if(attempt===1) console.log("❌ SYMBOL FAIL:", url)
+                if(attempt === 1){
+                    console.log(`❌ DATA FAIL ${interval}:`, symbol)
+                }
             }
         }
     }
@@ -192,7 +132,7 @@ async function getTopSymbols(){
     return null
 }
 
-// ================= CORE =================
+// ================= CORE LOGIC =================
 async function coreLogic(data15, data1h){
 
     let closes = data15.map(x=>+x[4])
@@ -202,266 +142,162 @@ async function coreLogic(data15, data1h){
     let closes1h = data1h.map(x=>+x[4])
 
     let price = closes.at(-1)
-    
+
+    // ===== VOLUME =====
     let volAvg = volumes.slice(-30).reduce((a,b)=>a+b,0)/30
     let volNow = volumes.at(-1)
 
     let volAvgUSDT = volAvg * price
     let volNowUSDT = volNow * price
-
-    if(volNowUSDT < volAvgUSDT * 1.1) return null //1.1
+ 
     if(volAvgUSDT < MIN_VOL_15M) return null
+    if(volNowUSDT < volAvgUSDT * 1.1) return null // giảm nhẹ
 
     // ===== EMA =====
     let ema20 = ema(closes.slice(-60),20)
     let ema50 = ema(closes.slice(-120),50)
-    let ema200= ema(closes.slice(-250),200)
 
     let ema20_1h = ema(closes1h.slice(-60),20)
     let ema50_1h = ema(closes1h.slice(-120),50)
+     // ===== TREND FILTER =====
+    let trendLong = ema20 > ema50 && ema20_1h > ema50_1h
+    let trendShort = ema20 < ema50 && ema20_1h < ema50_1h
 
     // ===== TREND =====
-    let trendHTF = Math.abs(ema20_1h - ema50_1h) / price
     let trendLTF = Math.abs(ema20 - ema50) / price
+    let trendHTF = Math.abs(ema20_1h - ema50_1h) / price
 
-    //if(trendHTF < 0.0012 && trendLTF < 0.001) return null
+    if(trendLTF < 0.001 || trendHTF < 0.001) return null
 
-    let dynamicThreshold = 100
-    if(trendHTF > 0.003 && trendLTF > 0.002) dynamicThreshold = 90 //90
-    else if(trendHTF > 0.0015) dynamicThreshold = 95 // 95
-    else dynamicThreshold = 105 // 105
-
-    let r = rsi(closes.slice(-50))
+    // ===== ATR =====
     let atrVal = atr(data15.slice(-100))
+    if(atrVal / price < 0.0018) return null
 
-    let volatility = "LOW"
-    if(atrVal / price > 0.0045) volatility = "HIGH"
+    // ===== COMPRESSION =====
+    let range = (Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))) / price
+    if(range > 0.03) return null // nới nhẹ
 
-    // ===== ANTI CHASE (GIỮ 1) =====
-   // let lastMove = (closes.at(-1) - closes.at(-3)) / closes.at(-3)
-   // if(Math.abs(lastMove) > 0.03) return null
+    // ===== BREAKOUT =====
+    let prevHigh = Math.max(...highs.slice(-25,-1))
+    let prevLow  = Math.min(...lows.slice(-25,-1))
 
-    // ===== WICK =====
-    if((highs.at(-1) - lows.at(-1)) > atrVal * 3.0) return null
+    let breakoutUp = price > prevHigh
+    let breakoutDown = price < prevLow
 
-    // ===== MARKET =====
-    let emaGap = Math.abs(ema20 - ema50) / price
-    let atrRatio = atrVal / price
+    if(!breakoutUp && !breakoutDown) return null
 
-    let marketState = "SIDEWAY"
-    if(emaGap > 0.004 && atrRatio > 0.0045) marketState = "TREND_STRONG"
-    else if(emaGap > 0.0025) marketState = "TREND_WEAK"
+    if(breakoutUp && !trendLong) return null
+    if(breakoutDown && !trendShort) return null
 
-    let range = (Math.max(...highs.slice(-30)) - Math.min(...lows.slice(-30))) / price
-    if(marketState === "SIDEWAY" && range < 0.002) return null
+    // ===== MOMENTUM MODE =====
+let momentum = (price - closes.at(-5)) / price
+let momentumVol = volNow > volAvg * 1.1
 
-    // ===== EMA DIST =====
-    let distEma = Math.abs(price - ema20) / price
-    let nearEma = distEma < 0.0065
+// LONG
+if(breakoutUp && trendLong && momentum > 0.003 && momentumVol){
+    let entry = price
+    let sl = entry - atrVal * 1.2
+    let tp = entry + atrVal * 3.5
 
-    if(marketState === "SIDEWAY"){
-        if(nearEma && volNow < volAvg * 0.5) return null
-    }
+    let risk = Math.abs(entry - sl)
+    let rr = Math.abs(tp - entry) / risk
 
-    // ===== STRUCTURE =====
-    let rangeHigh = Math.max(...highs.slice(-30))
-    let rangeLow  = Math.min(...lows.slice(-30))
-    if(rangeHigh === rangeLow) return null
-
-    let pos = (price - rangeLow) / (rangeHigh - rangeLow)
-    if(marketState === "SIDEWAY"){
-    if(pos > 0.3 && pos < 0.7) return null
-}
-    let side=null, score=0
-    let setupType = null
-
-    let prevHigh = Math.max(...highs.slice(-25,-5))
-    let prevLow  = Math.min(...lows.slice(-25,-5))
-
-    let bosUp = price > prevHigh
-    let bosDown = price < prevLow
-
-    let prevHigh50 = Math.max(...highs.slice(-51,-1))
-    let prevLow50  = Math.min(...lows.slice(-51,-1))
-
-    let sweepHigh = highs.at(-2) > prevHigh50 && closes.at(-2) < prevHigh50
-    let sweepLow  = lows.at(-2) < prevLow50 && closes.at(-2) > prevLow50
-
-    // ===== MOMENTUM =====
-    let momentumStrength = (closes.at(-1) - closes.at(-4)) / closes.at(-4)
-
-    let momentumUp = momentumStrength > 0.002
-    let momentumDown = momentumStrength < -0.002
-
-    let higherLow = lows.at(-2) > lows.at(-5)
-    let lowerHigh = highs.at(-2) < highs.at(-5)
-
-    let volTrendUp = volumes.slice(-5).every((v,i,a)=> i===0 || v>=a[i-1])
-
-    // ===== TREND FILTER =====
-    let trendLong = ema20>ema50 && ema50>ema200 && ema20_1h>ema50_1h
-    let trendShort = ema20<ema50 && ema50<ema200 && ema20_1h<ema50_1h
-
-    let trendStrength = Math.abs(ema20-ema50)/price
-    if(marketState !== "SIDEWAY" && trendStrength < 0.0015){ //0.002
-    return null
-}
-
-    // ===== SIDEWAY =====
-    if(marketState === "SIDEWAY"){
-        if(sweepHigh){ side="SHORT"; score+=60 }
-        if(sweepLow){ side="LONG"; score+=60 }
-        if(!side) return null
-        if(bosUp || bosDown) return null
-    }
-    // Fake breakout
-    let fakePump = volNow > volAvg*2.5 && closes.at(-1) < highs.at(-1)*0.98
-let fakeDump = volNow > volAvg*2.5 && closes.at(-1) > lows.at(-1)*1.02
-
-if(fakePump || fakeDump) return null
-
-    // ===== SCORE =====
-    if(!side){
-    if(trendLong){ side="LONG"; score+=50 }
-    else if(trendShort){ side="SHORT"; score+=50 }
-}
-
-    // ===== SETUP =====
-    if(side==="LONG" && bosUp){
-        score += 40
-        setupType = "BREAKOUT"
-    }
-
-    if(side==="SHORT" && bosDown){
-        score += 40
-        setupType = "BREAKOUT"
-    }
-
-    if(side==="LONG" && nearEma){
-        score += 20
-        if(!setupType) setupType = "PULLBACK"
-    }
-
-    if(side==="SHORT" && nearEma){
-        score += 20
-        if(!setupType) setupType = "PULLBACK"
-    }
-
-    if(side==="LONG" && sweepLow) score+=35
-    if(side==="SHORT" && sweepHigh) score+=35
-
-    if(volTrendUp) score+=20
-    if(volNow > volAvg*1.5) score+=15 
-
-    if(side==="LONG" && momentumUp) score+=10
-    if(side==="SHORT" && momentumDown) score+=10
-
-    if(side==="LONG" && higherLow) score+=15
-    if(side==="SHORT" && lowerHigh) score+=15
-   
-    if(side==="LONG" && r>50 && r<65) score+=10
-    if(side==="SHORT" && r>35 && r<50) score+=10
-
-    if(!side) return null
-    
-// kháng cự hỗ trợ gần quá thì tránh vào (giữ nguyên)
-     let resistance = Math.max(...highs.slice(-30))
-let support = Math.min(...lows.slice(-30))
-let distToRes = (resistance - price) / price
-let distToSup = (price - support) / price
-
-if(setupType !== "BREAKOUT"){
-if(side === "LONG" && distToRes < 0.002) return null
-if(side === "SHORT" && distToSup < 0.002) return null
-}
-    // ===== ANTI FOMO (GỌN - KHÔNG TRÙNG) =====
-    let distance = Math.abs(price - ema20)
-
-    if(setupType !== "BREAKOUT"){
-    if(marketState !== "TREND_STRONG" && distance > atrVal * 4){
-        return null
-    }
-    }
-    // ===== SL TP (GIỮ NGUYÊN) =====
-    let swingLow = Math.min(...lows.slice(-20))
-    let swingHigh = Math.max(...highs.slice(-20))
-
-    let sl = side==="LONG"
-        ? swingLow - atrVal
-        : swingHigh + atrVal
-
-    let risk = Math.abs(price - sl)
-
-let tp
-
-if(side === "LONG"){
-    tp = Math.min(
-        price + risk * RR_THRESHOLD,
-        resistance
-    )
-}else{
-    tp = Math.max(
-        price - risk * RR_THRESHOLD,
-        support
-    )
-}
-// kiểm tra khoảng cách giữa tp và price
-if(Math.abs(tp - price) / price < 0.0015){
-    return null
-}
-        // candle có thân lớn so với toàn cây không (giữ nguyên)
-        let open = +data15.at(-1)[1]
-let close = +data15.at(-1)[4]
-
-let body = Math.abs(close - open)
-let rangeCandle = highs.at(-1) - lows.at(-1)
-
-if(rangeCandle === 0 || body / rangeCandle < 0.2){
-    return null
-}
-
-    function round(n){ return Number(n.toFixed(4)) }
-
-    if(!setupType){
-    if(bosUp || bosDown){
-        setupType = "BREAKOUT"
-    }else{
-        setupType = "PULLBACK"
+    if(rr >= 1.2){
+        return {
+            side: "LONG",
+            entry,
+            sl,
+            tp,
+            rr,
+            atr: atrVal,
+            type: "MOMENTUM"
+        }
     }
 }
+
+// SHORT
+if(breakoutDown && trendShort && momentum < -0.003 && momentumVol){
+    let entry = price
+    let sl = entry + atrVal * 1.2
+    let tp = entry - atrVal * 3.5
+
+    let risk = Math.abs(entry - sl)
+    let rr = Math.abs(tp - entry) / risk
+
+    if(rr >= 1.2){
+        return {
+            side: "SHORT",
+            entry,
+            sl,
+            tp,
+            rr,
+            atr: atrVal,
+            type: "MOMENTUM"
+        }
+    }
+}
+
+    // ===== RETEST + BREAK MẠNH =====
+    let retestLong = Math.abs(price - prevHigh) / price < 0.003
+    let retestShort = Math.abs(price - prevLow) / price < 0.003
+
+    let strongBreakUp = (price - prevHigh) / price > 0.0015
+    let strongBreakDown = (prevLow - price) / price > 0.0015
+
+    if(breakoutUp && !strongBreakUp && !momentumVol) return null
+    if(breakoutDown && !strongBreakDown && !momentumVol) return null
+    // ===== ANTI FAKE BREAK =====
+    let lastRange = highs.at(-1) - lows.at(-1)
+    if(lastRange > atrVal * 2.5) return null
+
+    // ===== KHÔNG ĐU QUÁ XA =====
+    let distance = Math.abs(price - (breakoutUp ? prevHigh : prevLow)) / price
+    if(distance > 0.015) return null // nới
+
+    // ===== CONFIRM CLOSE =====
+    let lastClose = closes.at(-1)
+
+    //if(breakoutUp && lastClose <= prevHigh) return null
+    //if(breakoutDown && lastClose >= prevLow) return null
+
+    // ===== ENTRY =====
+    let side = breakoutUp ? "LONG" : "SHORT"
+    let entry = price
+
+    // ===== SL =====
+    let swingLow = Math.min(...lows.slice(-10))
+    let swingHigh = Math.max(...highs.slice(-10))
+
+    let sl = breakoutUp
+        ? swingLow - atrVal * 0.2
+        : swingHigh + atrVal * 0.2
+
+    let risk = Math.abs(entry - sl)
+    if(risk === 0) return null
+
+    // ===== TP =====
+    let range25 = Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))
+
+    let tp = breakoutUp
+        ? entry + range25 * 1.0
+        : entry - range25 * 1.0
+
+    let rr = Math.abs(tp - entry) / risk
+    if(rr < RR_THRESHOLD) return null
 
     return {
         side,
-        score,
-        dynamicThreshold,
-        setup: setupType,
-        marketState,
-        volatility,
-        momentumUp,
-        momentumDown,
-        price: round(price),
-        sl: round(sl),
-        tp: round(tp),
-        atr: round(atrVal)
+        entry,
+        sl,
+        tp,
+        rr,
+        atr: atrVal
     }
 }
-// ================= SCAN =================
-async function scan(symbol){
-    let data15 = await getData(symbol,"15m",LIMIT_15M)
-    let data1h = await getData(symbol,"1h",LIMIT_1H)
-   if(!data15 || !data1h){
-    console.log(`❌ No data: ${symbol}`)
-    return null
-}
-    let r = await coreLogic(data15,data1h)
-    if(!r || !r.side) return null
 
-    return { symbol, ...r }
-}
-
-// ================= SCANNER ================
+// ================= SCANNER =================
 async function scanner(){
-    
+
     if(isScanning){
         console.log("⛔ Skip scan trùng")
         return
@@ -470,721 +306,225 @@ async function scanner(){
     isScanning = true
 
     try{
-        console.log("🚀 SMART SCAN...")
-
-        let now = Date.now()
-
-        // ===== UPDATE SYMBOL =====
-        if(!cachedSymbols || now - lastSymbolsUpdate > 900000){
-            console.log("🔄 Updating symbols...")
-
-            let newSymbols = await getTopSymbols()
-
-            if(newSymbols && newSymbols.length > 0){
-                cachedSymbols = newSymbols
-                lastSymbolsUpdate = now
-            }
-        }
-
-        // ===== SYMBOL LIST =====
-        let symbols = cachedSymbols || ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","ADAUSDT",
-        "AVAXUSDT","LINKUSDT","DOTUSDT","MATICUSDT",
-        "ATOMUSDT","NEARUSDT","FILUSDT","LTCUSDT",
-        "AAVEUSDT","MKRUSDT","OPUSDT","IMXUSDT","RUNEUSDT"]
-
-        if(symbols && symbols.length > 0){
-            console.log(`✅ Using ${symbols.length} symbols`)
-        }
-
-        // ===== SCAN =====
-        let results = await Promise.allSettled(symbols.map(scan))
-
-        let signals = results
-            .filter(r => r.status === "fulfilled" && r.value)
-            .map(r => r.value)
-
-        if(!signals || signals.length === 0){
-            console.log("❌ No signal")
-            isScanning = false
-            return
-        }
-
-        // ===== BUILD CANDIDATES + AI =====
-let candidates = []
-let dbCache = {}
-
-for (let s of signals){
-
-    // ===== MAIN =====
-    let keyMain = `${s.setup}-${s.marketState}-${s.side}-${s.volatility}`
-
-    if(!dbCache[keyMain]){
-        dbCache[keyMain] = await getDBStats(
-            s.setup,
-            s.marketState,
-            s.side,
-            s.volatility
-        )
-    }
-
-    let dbMain = dbCache[keyMain]
-
-    let weightMain = Math.min(dbMain.total / 50, 1)
-    let aiMain = (dbMain.winrate - 0.5) * 200 * weightMain
-
-    if(dbMain.total < 15) aiMain *= 0.5
-
-    let finalMain = s.score + aiMain
-
-    if(finalMain >= s.dynamicThreshold){
-        candidates.push({
-            ...s,
-            finalScore: finalMain,
-            type: "MAIN"
-        })
-    }
-}
-        // ===== NO CANDIDATE =====
-        if(!candidates || candidates.length === 0){
-            console.log("❌ No signal")
-            return
-        }
-
-        // ===== SORT =====
-      candidates.sort((a,b)=>{
-
-    if(a.marketState === "TREND_STRONG" && b.marketState !== "TREND_STRONG") return -1
-    if(b.marketState === "TREND_STRONG" && a.marketState !== "TREND_STRONG") return 1
-
-    return (b.finalScore || b.score) - (a.finalScore || a.score)
-})
-
-// let main = candidates.find(c => c.type === "MAIN")
-
-let best = candidates[0]
-
-// ===== CHECK DB AI =====
-let dbAI = await getDBStats(
-    best.setup,
-    best.marketState,
-    best.side,
-    best.volatility
-)
-// ===== AI MARKET ADAPTIVE =====
-if(dbAI.total > 20){
-
-    if(best.marketState === "SIDEWAY"){
-        if(dbAI.winrate < 0.48){
-            best.finalScore -= 15
-        }
-    }
-
-    if(best.marketState === "TREND_STRONG"){
-        if(dbAI.winrate > 0.55){
-            best.finalScore += 10
-        }
-    }
-
-}
-// ===== CHECK BEST CANDIDATE =====
-       // ❌ check trước
-if(!best){
-    console.log("❌ Invalid best")
+        console.log("🚀 SCAN BTC...")
+        if(Date.now() - lastSignalTime < 600000){ // 10 phút
+    console.log("⏳ Đợi cooldown...")
+    isScanning = false
     return
 }
 
-// ===== EARLY =====
-//if(best.type === "EARLY"){
-
-   // let rr = Math.abs(best.tp - best.price) / Math.abs(best.price - best.sl)
-
-    //if(best.score < EARLY_THRESHOLD){
-       // console.log("❌ Early score thấp")
-        //return
-    //}
-
-    //if(rr < 1.1){
-        //return
-   // }
-//}
-
-// ===== MAIN =====
-if(best.type !== "EARLY"){
-
-    let rr = Math.abs(best.tp - best.price) / Math.abs(best.price - best.sl)
-
-    //if(rr < RR_THRESHOLD){
-        //console.log("❌ RR MAIN fail")
-        //return
-    //}
-}
-    // nếu là breakout thì yêu cầu momentum rõ
-    if(best.setup === "BREAKOUT"){
-
-    let momentumStrength = (best.price - prevPrice) / prevPrice
-
-    if(best.momentumUp || best.momentumDown){
-        best.finalScore += 10
-    }else{
-        if(best.marketState === "SIDEWAY"){
-            console.log("❌ ,momentum kh rõ")
+        // ===== CHỈ 1 LỆNH BTC =====
+        if(activeTrades.length > 0){
+            console.log("⛔ Đang có lệnh")
             return
         }
-        best.finalScore -= 5
-    }
 
+        let data15 = await getData("BTCUSDT","15m",300)
+        let data1h = await getData("BTCUSDT","1h",200)
+        let data1m = null
+
+for(let i=0;i<3;i++){
+    data1m = await getData("BTCUSDT","1m",50)
+    if(data1m) break
+    await new Promise(r=>setTimeout(r,500))
 }
 
-    let weakMomentum =
-    Math.abs(best.price - best.sl)/best.price < 0.0015 &&
-    !best.momentumUp && !best.momentumDown
+if(!data1m){
+    console.log("⚠️ 1m fail → dùng entry 15m")
+    data1m = data15 // fallback
+}
+
+        if(!data15 || !data1h){
+            console.log("❌ Data fail")
+            return
+        }
+
+        let r = await coreLogic(data15, data1h)
+
+        if(!r){
+            console.log("❌ No signal BTC")
+            return
+        }
+        
+        // ======== ENTRY 1M ========
+        if(r.type !== "MOMENTUM"){
+    r.entry = getBetterEntry(r, data1m)
+}
+        // ======= filter tránh đu giá  =======
+        let distance = Math.abs(r.entry - r.sl) / r.entry
+
+// tránh entry quá xa
+if(distance > 0.02){ // nới nhẹ
+    console.log("❌ Entry quá xa")
+    return
+}
+
+        // ===== RR CHECK =====
+        let risk = Math.abs(r.entry - r.sl)
+        if(!risk || risk === 0) return
+
+        // ===== TELE =====
+        let msg = `🔥 BTC SIGNAL
+
+${r.side}
+ENTRY: ${r.entry}
+TP: ${r.tp}
+SL: ${r.sl}
+RR: ${r.rr.toFixed(2)}
+`
+
+        console.log(msg)
+        await sendTelegram(msg)
+        lastSignalTime = Date.now()
     
-    if(best.setup === "PULLBACK" && weakMomentum && best.type !== "EARLY"){
-    return
-}
-        // ===== BLOCK DUPLICATE SIGNAL =====
-let nowTime = Date.now()
+        // ===== SAVE TRADE (RAM) =====
+        let trade = {
+            symbol: "BTCUSDT",
+            side: r.side,
+            entry: r.entry,
+            tp: r.tp,
+            sl: r.sl,
+            time: Date.now(),
+            beMoved: false
+        }
 
-let symbolKey = `${best.symbol}-${best.side}`
-
-if(lastSignalTime[symbolKey]){
-    let diff = Date.now() - lastSignalTime[symbolKey]
-
-    if(diff < 3600000){
-        console.log(`⛔ Skip trùng coin: ${symbolKey}`)
-        return
-    }
-}
-
-
-        // ===== RISK =====
-        let multiplier = 1
-
-if(dbAI.total > 20){
-
-    let edge = dbAI.winrate - 0.5
-
-    multiplier = 1 + edge * 2   // scale mềm
-
-    // clamp lại
-    if(multiplier > 1.5) multiplier = 1.5
-    if(multiplier < 0.5) multiplier = 0.5
-}
-let risk = ACCOUNT_BALANCE * RISK_PER_TRADE * multiplier
-
-        if(best.type === "EARLY") risk *= 0.5
-// ===== CHECK SL TP TRƯỚC =====
-if(!best.sl || !best.tp){
-    console.log("❌ Missing SL TP")
-    return
-}
-
-// ===== TÍNH DIFF SAU =====
-let diff = Math.abs(best.price - best.sl)
-
-if(!diff || diff === 0){
-    console.log("❌ Invalid SL distance")
-    return
-}
-
-        let size = risk / diff
-       
-        let trailingSL = best.side === "LONG"
-            ? best.price - best.atr
-            : best.price + best.atr
-            
-// ===== TÍNH RR =====
-let rr = best.side === "LONG"
-    ? (best.tp - best.price) / (best.price - best.sl)
-    : (best.price - best.tp) / (best.sl - best.price)
-
-// ===== AI RR ADAPTIVE =====
-if(dbAI.total > 20){
-
-    if(dbAI.winrate > 0.6){
-        rr *= 0.9   // dễ vào hơn (TP gần hơn)
-    }
-
-    if(dbAI.winrate < 0.45){
-        rr *= 1.1   // khó hơn (đòi RR cao hơn)
-    }
-}
-        // === RR ====
-let rrThreshold = RR_THRESHOLD
-
-if(dbAI.total > 20){
-
-    if(dbAI.winrate > 0.6){
-        rrThreshold = 1.1   // dễ hơn
-    }
-
-    if(dbAI.winrate < 0.45){
-        rrThreshold = 1.35  // khó hơn
-    }
-}
-
-// check
-if(rr < rrThreshold){
-
-    // ❌ RR quá xấu → loại luôn
-    if(rr < 1.0){
-        return
-    }
-
-    // ❌ không đủ đẹp → loại
-    if(best.marketState !== "TREND_STRONG" && best.finalScore < 95){ // 105
-        console.log("❌ không đủ đẹp")
-        return
-    }
-    // 🔥 thêm dòng này
-    if(rr < 1.05 && best.marketState !== "TREND_STRONG"){ // 1.1
-        console.log("❌ RR hơi thấp")
-        return
-    }
-    // ⚠️ còn lại → giảm điểm nhẹ
-    best.finalScore -= 10
-}
-//if(rr < rrThreshold){
-     //console.log("❌ rr <rrThreshold") bật lại nếu kèo rác
-   // return
-//}
-// ===== AI BLOCK =====
-let threshold = 0.48
-
-if(best.marketState === "TREND_STRONG"){
-    threshold = 0.44
-}
-
-if(best.marketState === "SIDEWAY"){
-    threshold = 0.52
-}
-
-let aiScoreAdjust = 0
-
-if(dbAI.total > 10){
-
-    let edge = dbAI.winrate - 0.5  // lợi thế
-
-    // scale nhẹ để không phá logic gốc
-    aiScoreAdjust = edge * 100   // ~ -10 → +10
-
-    // confidence theo sample
-    let confidence = Math.min(dbAI.total / 50, 1)
-
-    aiScoreAdjust *= confidence
-}
-
-// áp vào score
-best.finalScore = (best.finalScore || best.score) + aiScoreAdjust
-        // ===== MESSAGE =====
-      // let msg = `🔥 BEST SIGNAL
-
-//${best.symbol} (${best.type} - ${best.setup})
-//${best.side} | ${best.marketState}
-//Entry Zone: ${best.price.toFixed(4)}
-//TP: ${best.tp.toFixed(4)}
-//SL: ${best.sl.toFixed(4)}
-//Trailing SL: ${trailingSL.toFixed(4)}
-//Size: ${size.toFixed(2)}
-//Score: ${t.score || 0}
-//`
-
-       //onsole.log(msg)
-       //et ok = await sendTelegram(msg)
-
-//(ok !== false){
-   //astSignalTime[symbolKey] = Date.now()
-//}
-        // ===== SAVE TRADE =====
-let trade = {
-    symbol: best.symbol,
-    side: best.side,
-    risk: risk,
-
-    // ❌ chưa vào lệnh
-    entry: null,
-
-    // ✅ giá chờ
-    entryZone: best.price,
-
-    tp: best.tp,
-    sl: best.sl,
-    score: best.score,
-    waitingEntry: true,   // 🔥 CHỜ 1M CONFIRM
-    createdAt: Date.now(),
-    breakoutTriggered: false, // 🔥 BREAKOUT CHƯA TRIGGER
-    setup: best.setup,
-    marketState: best.marketState,
-    volatility: best.volatility,
-    atr: best.atr,
-
-    time: Date.now(),
-    result: "PENDING"
-}
-
-if(activeTrades.some(x => x.symbol === best.symbol)){
-    console.log("⛔ Đã có lệnh chờ coin này")
-    return
-}
-
-activeTrades.push(trade)
-if(activeTrades.length > 50){
-    activeTrades.shift()
-}
-
-// 🔥 THÊM DÒNG NÀY (lưu DB)
-await trades.insertOne(trade)
+        activeTrades.push(trade)
 
     }catch(e){
-    console.log("❌ Scanner error:")
-    console.log(e)
-} finally {
-    isScanning = false   // ✅ THẢ LOCK
+        console.log("❌ scanner error:", e.message)
+    }finally{
+        isScanning = false
+    }
 }
-}
-////////////////////
+
+
+// ================= CHECK TRADES =================
 async function checkTrades(){
 
     if(activeTrades.length === 0) return
 
-    let data1mCache = {}
+    let data = await getData("BTCUSDT","1m",2)
+    if(!data) return
 
-for(let i = activeTrades.length - 1; i >= 0; i--){
+    let price = +data.at(-1)[4]
 
-    let t = activeTrades[i]
+    for(let i = activeTrades.length -1; i>=0; i--){
 
-    try{
+        let t = activeTrades[i]
+        let duration = Date.now() - t.time
 
-        if(!data1mCache[t.symbol]){
-            data1mCache[t.symbol] = await getData(t.symbol,"1m",50)
+        let win = false
+        let done = false
+        let exitPrice = price
+
+        // ===== TIMEOUT 6H =====
+        if(duration > 21600000){
+
+            let pnl = t.side === "LONG"
+                ? ((price - t.entry) / t.entry) * 100
+                : ((t.entry - price) / t.entry) * 100
+
+            let msg = `⏰ BTC TIMEOUT 6H
+${t.side}
+
+PnL: ${pnl.toFixed(2)}%
+PRICE: ${price}`
+
+            await sendTelegram(msg)
+            activeTrades.splice(i,1)
+    continue
         }
 
-        let data = data1mCache[t.symbol]
-        if(!data) continue
+        // ===== BREAK EVEN =====
+let risk = Math.abs(t.entry - t.sl)
 
-            let price = +data.at(-1)[4]
-            // ================= ENTRY 1M CONFIRM =================
-if(t.waitingEntry){
-    // timeout 1h
-    if(Date.now() - t.createdAt > 60 * 60 * 1000){
-    console.log(`⛔ Timeout entry ${t.symbol}`)
-    t.closed = true
-    continue
+let beTrigger = t.side === "LONG"
+    ? t.entry + risk * 0.7
+    : t.entry - risk * 0.7
+
+if(!t.beMoved){
+    if(
+        (t.side === "LONG" && price >= beTrigger) ||
+        (t.side === "SHORT" && price <= beTrigger)
+    ){
+        t.sl = t.entry
+        t.beMoved = true
+
+        await sendTelegram(`🔒 BE ACTIVATED
+${t.side}
+SL moved to: ${t.sl.toFixed(2)}`)
+    }
 }
 
-    let closes = data.map(x => +x[4])
-    let last = closes.at(-1)
-    let prev = closes.at(-2)
+// ===== TRAILING SL =====
+if(t.beMoved){
 
-    let confirm = false
-    let waitTime = Date.now() - t.time
+    let trail = Math.abs(price - t.entry) * 0.5
 
-if(t.waitingEntry && waitTime > 1800000){ // 30 phút
-    console.log(`❌ Hủy lệnh chờ: ${t.symbol}`)
-
-    await trades.updateOne(
-        { symbol: t.symbol, time: t.time },
-        { $set: { result: "CANCEL" } }
-    )
-
-    activeTrades.splice(i,1)
-    continue
-}
-
-    // ===== LONG =====
     if(t.side === "LONG"){
-    if(last <= t.entryZone * 1.001 && last > prev * 1.002){
-        confirm = true
+        let newSL = price - trail
+
+        if(newSL > t.sl){
+            t.sl = newSL
+
+            await sendTelegram(`📈 TRAILING SL
+LONG
+New SL: ${t.sl.toFixed(2)}
+Price: ${price}`)
+        }
+    }
+
+    if(t.side === "SHORT"){
+        let newSL = price + trail
+
+        if(newSL < t.sl){
+            t.sl = newSL
+
+            await sendTelegram(`📉 TRAILING SL
+SHORT
+New SL: ${t.sl.toFixed(2)}
+Price: ${price}`)
+        }
     }
 }
 
-if(t.side === "SHORT"){
-    if(last >= t.entryZone * 0.999 &&  last < prev * 0.998){
-        confirm = true
-    }
-}
-activeTrades = activeTrades.filter(t => !t.closed)
-    // ===== VÀO LỆNH =====
-    if(confirm){
-    t.entry = price
-    t.waitingEntry = false
-
-    let trailingSL = t.side === "LONG"
-        ? t.entry - t.atr
-        : t.entry + t.atr
-
-    let size = t.risk / Math.abs(t.entry - t.sl)
-
-    let msg = `🔥 BEST SIGNAL
-
-${t.symbol} (${t.setup})
-${t.side} | ${t.marketState}
-
-Entry: ${t.entry.toFixed(4)}
-
-TP: ${t.tp.toFixed(4)}
-
-SL: ${t.sl.toFixed(4)}
-
-Trailing SL: ${trailingSL.toFixed(4)}
-Size: ${size.toFixed(2)}
-Score: ${t.score || 0}
-`
-    console.log(msg)
-    let ok = await sendTelegram(msg)
-
-    lastSignalTime[`${t.symbol}-${t.side}`] = Date.now()
-}
-
-    // ❌ chưa confirm thì bỏ qua
-    continue
-}
-if(!t.entry) continue
-
-            let win = false
-            let done = false
+        // ===== TP / SL =====
+        if(!done){
 
             if(t.side === "LONG"){
-                if(price >= t.tp){ win = true; done = true }
-                if(price <= t.sl){ win = false; done = true }
-                
+                if(price >= t.tp){ win=true; done=true; exitPrice = t.tp }
+                if(price <= t.sl){ done=true; exitPrice = t.sl }
             }
 
             if(t.side === "SHORT"){
-                if(price <= t.tp){ win = true; done = true }
-                if(price >= t.sl){ win = false; done = true }
+                if(price <= t.tp){ win=true; done=true; exitPrice = t.tp }
+                if(price >= t.sl){ done=true; exitPrice = t.sl }
             }
-        
 
-            // timeout 6h
-let isTimeout = Date.now() - t.time > 21600000
+            if(done){
 
-// ===== TIMEOUT TRƯỚC =====
-if(isTimeout){
-    
-    await trades.updateOne(
-    { symbol: t.symbol, time: t.time },
-    { $set: { result: "TIMEOUT" } }
-)
-    console.log(`⏳ Timeout: ${t.symbol}`)
+                let pnl = t.side === "LONG"
+                    ? ((exitPrice - t.entry) / t.entry) * 100
+                    : ((t.entry - exitPrice) / t.entry) * 100
 
-    await sendTelegram2(
-`⏳ TIMEOUT ${t.symbol}
-${t.side}
-⛔ Không chạm TP/SL trong 6h`
-    )
+                let msg = `📊 BTC RESULT
+${t.side} ${win ? "✅ WIN" : "❌ LOSS"}
 
-    activeTrades.splice(i,1)
-    continue
-}
+PnL: ${pnl.toFixed(2)}%
+PRICE: ${price}`
 
-// ===== SAU ĐÓ MỚI CHECK TP/SL =====
-if(done){
-        // 🔥 UPDATE DB
-    await trades.updateOne(
-        { symbol: t.symbol, time: t.time },
-        { $set: { result: win ? "WIN" : "LOSS" } }
-    )
+                await sendTelegram(msg)
+            }
+        }
 
-    let msg =
-`📊 RESULT ${t.symbol}
-${t.side}
-${win ? "✅ WIN" : "❌ LOSS"}`
-    
-// await sendTelegram(msg)
-    await sendTelegram2(msg)
-
-    activeTrades.splice(i,1)
-    continue
-}
-
-        }catch(e){
-            console.log("❌ checkTrades:", e.message)
+        // ===== XÓA LỆNH =====
+        if(done){
+            activeTrades.splice(i,1)
         }
     }
-} 
-
-async function start(){
-    try{
-
-        if(!process.env.MONGO_URI){
-            throw new Error("❌ Thiếu MONGO_URI")
-        }
-
-        await client.connect()
-
-        try{
-    await client.db("admin").command({ ping: 1 })
-    console.log("🟢 DB CONNECTED OK")
-}catch(e){
-    console.log("🔴 DB CONNECT FAIL:", e.message)
 }
-
-        db = client.db("trading")
-        trades = db.collection("trades")
-
-        console.log("✅ MongoDB connected")
-
-        // 🔥 LOAD LẠI LỆNH
-        activeTrades = await trades.find({ result: "PENDING" }).toArray()
-        console.log(`♻️ Load lại ${activeTrades.length} lệnh`)
-
-        // ================= LOOP =================
-setInterval(()=>scanner(),120000)
-setInterval(()=>checkCommand(),10000)
+// ================= LOOP =================
+setInterval(()=>scanner(),60000)
 setInterval(()=>checkTrades(),60000)
 
         scanner()
-
-    }catch(e){
-        console.log("❌ Start error:", e.message)
-    }
-}
-
-async function getDBStats(setup, market, side, volatility){
-
-    if(!trades){
-        return { winrate: 0.5, total: 0 }
-    }
-
-    try{
-        const col = trades
-
-        // ===== lấy dữ liệu db =====
-        let totalDB = await col.countDocuments({
-            result: { $ne: "PENDING" }
-        })
-
-        let minSample = Math.min(Math.max(20, Math.floor(totalDB * 0.1)), 50)
-
-        // ===== QUERY CHÍNH =====
-        let data = await col.find({
-            setup,
-            marketState: market,
-            side,
-            result: { $ne: "PENDING" }
-        }).toArray()
-
-        // ===== FILTER VOL =====
-        let filtered = data.filter(t => !t.volatility || t.volatility === volatility)
-
-        // ===== ƯU TIÊN VOL =====
-        if(filtered.length >= minSample){
-            data = filtered
-        }
-
-        // ===== FALLBACK 1 =====
-        if(data.length < minSample){
-            data = await col.find({
-                setup,
-                side,
-                result: { $ne: "PENDING" }
-            }).toArray()
-        }
-
-        // ===== FALLBACK 2 =====
-        if(data.length < minSample){
-            data = await col.find({
-                side,
-                result: { $ne: "PENDING" }
-            }).toArray()
-        }
-
-        // ===== FINAL =====
-        if(data.length === 0){
-            return { winrate: 0.5, total: 0 }
-        }
-
-        // ===== TIME DECAY AI =====
-        let winScore = 0
-        let lossScore = 0
-
-        for(let t of data){
-
-            let ageHours = t.time 
-                ? (Date.now() - t.time) / 3600000 
-                : 999
-
-            // 🔥 decay 48h
-            let weight = Math.exp(-ageHours / 48)
-
-            if(t.result === "WIN"){
-                winScore += weight
-            }
-            else if(t.result === "LOSS"){
-                lossScore += weight
-            }
-            else{
-                lossScore += weight * 0.5
-            }
-        }
-
-        // ===== TRÁNH CHIA 0 =====
-        let rawWR = (winScore + lossScore) > 0
-            ? winScore / (winScore + lossScore)
-            : 0.5
-
-        // ===== CONFIDENCE =====
-        let confidence = Math.min(data.length / 40, 1)
-
-        let finalWR = 0.5 + (rawWR - 0.5) * confidence
-
-        if(DEBUG_AI){
-            console.log(
-                `🤖 AI ${setup}-${market}-${side}-${volatility} | WR:${finalWR.toFixed(2)} | N:${data.length}`
-            )
-        }   
-
-        if(DEBUG_AI){ 
-            console.log("📊 DB used:", data.length)
-        }
-
-        return {
-            winrate: finalWR,
-            total: data.length
-        }
-
-    }catch(e){
-        console.log("❌ DB ERROR:", e.message)
-        return { winrate: 0.5, total: 0 }
-    }
-}
-async function getBestTPSL(setup, market, side){
-
-    if(!trades) return null
-
-    let data = await trades.find({
-        setup,
-        marketState: market,
-        side,
-        result: { $in: ["WIN","LOSS","TIMEOUT"] }
-    }).toArray()
-
-    if(data.length < 30) return null
-
-    let rrArr = []
-
-    for(let t of data){
-
-        let risk = Math.abs(t.entry - t.sl)
-        if(!risk || risk === 0) continue
-
-        let rr = t.side === "LONG"
-            ? (t.tp - t.entry) / risk
-            : (t.entry - t.tp) / risk
-
-        if(rr > 0.5 && rr < 5){
-            rrArr.push(rr)
-        }
-    }
-
-    if(rrArr.length === 0) return null
-
-    rrArr.sort((a,b)=>a-b)
-
-    let best = rrArr[Math.floor(rrArr.length * 0.6)]
-
-    return { rr: best }
-}
-            
-start()
