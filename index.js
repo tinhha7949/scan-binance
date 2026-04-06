@@ -8,7 +8,7 @@ const LIMIT_1H  = 200
 const RR_THRESHOLD = 1.2
 const RISK_PER_TRADE = 0.005
 const ACCOUNT_BALANCE = 1000
-const MIN_VOL_15M = 30000000
+const MIN_VOL_15M = 800000
 
 let isScanning = false
 let lastSignalTime = 0
