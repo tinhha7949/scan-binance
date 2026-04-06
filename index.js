@@ -55,31 +55,36 @@ function getBetterEntry(r, data1m){
     // ===== LONG =====
     if(r.side === "LONG"){
 
-        // tìm đáy gần nhất (pullback nhẹ)
-        let recentLow = Math.min(...lows.slice(-5))
+    let recentLow = Math.min(...lows.slice(-5))
 
-        // nếu đang hồi xuống → vào tại giá hiện tại
-        if(price <= r.entry * 1.001){
-    return price
-}
-
-        // nếu đã chạy → chờ hồi
-        return recentLow
+    // ✅ nếu đang đi mạnh → vào luôn
+    if(price > r.entry * 1.0015){
+        return price
     }
+
+    // pullback nhẹ
+    if(price <= r.entry * 1.001){
+        return price
+    }
+
+    return recentLow
+}
 
     // ===== SHORT =====
     if(r.side === "SHORT"){
 
-        let recentHigh = Math.max(...highs.slice(-5))
+    let recentHigh = Math.max(...highs.slice(-5))
 
-        if(price >= r.entry * 0.999){
-    return price
-}
-
-        return recentHigh
+    if(price < r.entry * 0.9985){
+        return price
     }
 
-    return r.entry
+    if(price >= r.entry * 0.999){
+        return price
+    }
+
+    return recentHigh
+}
 }
 // ================= DATA =================
 async function getData(symbol, interval, limit){
@@ -166,7 +171,7 @@ async function coreLogic(data15, data1h){
 
     // ===== MOMENTUM MODE =====
 let momentum = (price - closes.at(-5)) / price
-let momentumVol = volNow > volAvg * 1.2
+let momentumVol = volNow > volAvg * 1.1
 
 // LONG
 if(breakoutUp && trendLong && momentum > 0.003 && momentumVol){
@@ -219,9 +224,8 @@ if(breakoutDown && trendShort && momentum < -0.003 && momentumVol){
     let strongBreakUp = (price - prevHigh) / price > 0.0015
     let strongBreakDown = (prevLow - price) / price > 0.0015
 
-    if(breakoutUp && !retestLong && !strongBreakUp) return null
-    if(breakoutDown && !retestShort && !strongBreakDown) return null
-
+    if(breakoutUp && !strongBreakUp && !momentumVol) return null
+    if(breakoutDown && !strongBreakDown && !momentumVol) return null
     // ===== ANTI FAKE BREAK =====
     let lastRange = highs.at(-1) - lows.at(-1)
     if(lastRange > atrVal * 2.5) return null
