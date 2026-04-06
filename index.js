@@ -374,7 +374,7 @@ RR: ${r.rr.toFixed(2)}
 `
 
         console.log(msg)
-        await sendTelegram(msg)
+        let ok = await sendTelegram(msg)
         lastSignalTime = Date.now()
     
         // ===== SAVE TRADE (RAM) =====
