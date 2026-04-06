@@ -8,7 +8,7 @@ const LIMIT_1H  = 200
 const RR_THRESHOLD = 1.2
 const RISK_PER_TRADE = 0.005
 const ACCOUNT_BALANCE = 1000
-const MIN_VOL_15M = 60000
+const MIN_VOL_15M = 30000000
 
 let isScanning = false
 let lastSignalTime = 0
@@ -130,8 +130,11 @@ async function coreLogic(data15, data1h){
     let volAvg = volumes.slice(-30).reduce((a,b)=>a+b,0)/30
     let volNow = volumes.at(-1)
 
-    if(volAvg < MIN_VOL_15M) return null
-    if(volNow < volAvg * 1.0) return null // giảm nhẹ
+    let volAvgUSDT = volAvg * price
+    let volNowUSDT = volNow * price
+ 
+    if(volAvgUSDT < MIN_VOL_15M) return null
+    if(volNowUSDT < volAvgUSDT * 1.1) return null // giảm nhẹ
 
     // ===== EMA =====
     let ema20 = ema(closes.slice(-60),20)
@@ -295,14 +298,17 @@ async function scanner(){
 
         // ===== CHỈ 1 LỆNH BTC =====
         if(activeTrades.length > 0){
-            console.log("⛔ Đang có lệnh, chờ kết quả")
+            console.log("⛔ Đang có lệnh")
             return
         }
 
         let data15 = await getData("BTCUSDT","15m",300)
         let data1h = await getData("BTCUSDT","1h",200)
         let data1m = await getData("BTCUSDT","1m",50)
-    if(!data1m) return
+    if(!data1m){
+    console.log("❌ Data 1m")
+       return
+    }
 
         if(!data15 || !data1h){
             console.log("❌ Data fail")
