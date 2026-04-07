@@ -324,7 +324,7 @@ async function scanner(){
 }
 
         // ===== CHỈ 1 LỆNH BTC =====
-        if(length > 0){
+        if(activeTrades.length > 0){
             console.log("⛔ Đang có lệnh")
             isScanning = false
             return
