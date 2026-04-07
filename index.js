@@ -161,7 +161,7 @@ async function coreLogic(data15, data1h){
     let volNowUSDT = volNow * price
  
     if(volAvgUSDT < MIN_VOL_15M) return null
-    if(volNowUSDT < volAvgUSDT * 1.05) return null // giảm nhẹ
+    if(volNowUSDT < volAvgUSDT * 0.9) return null // giảm nhẹ
 
     // ===== EMA =====
     let ema20 = ema(closes.slice(-60),20)
@@ -324,7 +324,7 @@ async function scanner(){
 }
 
         // ===== CHỈ 1 LỆNH BTC =====
-        if(activeTrades.length > 0){
+        if(length > 0){
             console.log("⛔ Đang có lệnh")
             isScanning = false
             return
