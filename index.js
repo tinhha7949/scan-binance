@@ -161,7 +161,7 @@ async function coreLogic(data15, data1h){
     let volNowUSDT = volNow * price
  
     if(volAvgUSDT < MIN_VOL_15M) return null
-    if(volNowUSDT < volAvgUSDT * 1.1) return null // giảm nhẹ
+    if(volNowUSDT < volAvgUSDT * 1.05) return null // giảm nhẹ
 
     // ===== EMA =====
     let ema20 = ema(closes.slice(-60),20)
