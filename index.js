@@ -201,7 +201,7 @@ async function coreLogic(data15, data1h){
 
     // ===== MOMENTUM MODE =====
 let momentum = (price - closes.at(-5)) / price
-let momentumVol = volNowUSDT >  * 1.05 //1.1
+let momentumVol = volNowUSDT > volAvgUSDT  * 1.05 //1.1
 
 // LONG
 if(breakoutUp && trendLong && momentum > 0.003 && momentumVol){
