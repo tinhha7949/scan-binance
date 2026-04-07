@@ -18,13 +18,23 @@ let activeTrades = []
 async function sendTelegram(msg){
     try{
         let url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`
-        await fetch(url,{
+        let res = await fetch(url,{
             method:"POST",
             headers:{"Content-Type":"application/json"},
             body: JSON.stringify({ chat_id: CHAT_ID, text: msg })
         })
+
+        let data = await res.json()
+
+        if(!data.ok){
+            console.log("❌ TELE FAIL:", data)
+        }
+
+        return data.ok
+
     }catch(e){
-        console.log("❌ TELE:", e.message)
+        console.log("❌ TELE ERROR:", e.message)
+        return false
     }
 }
 
@@ -316,6 +326,7 @@ async function scanner(){
         // ===== CHỈ 1 LỆNH BTC =====
         if(activeTrades.length > 0){
             console.log("⛔ Đang có lệnh")
+            isScanning = false
             return
         }
 
@@ -336,6 +347,7 @@ if(!data1m){
 
         if(!data15 || !data1h){
             console.log("❌ Data fail")
+            isScanning = false
             return
         }
 
@@ -375,8 +387,12 @@ RR: ${r.rr.toFixed(2)}
 
         console.log(msg)
         let ok = await sendTelegram(msg)
-        lastSignalTime = Date.now()
-    
+
+if(ok){
+    lastSignalTime = Date.now()
+}else{
+    console.log("❌ Không gửi được TELE")
+}
         // ===== SAVE TRADE (RAM) =====
         let trade = {
             symbol: "BTCUSDT",
