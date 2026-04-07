@@ -181,11 +181,11 @@ async function coreLogic(data15, data1h){
 
     // ===== ATR =====
     let atrVal = atr(data15.slice(-100))
-    if(atrVal / price < 0.0018) return null
+    if(atrVal / price < 0.0012) return null // 0.0018
 
     // ===== COMPRESSION =====
     let range = (Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))) / price
-    if(range > 0.03) return null // nới nhẹ
+    if(range > 0.015) return null // nới nhẹ 0.03
 
     // ===== BREAKOUT =====
     let prevHigh = Math.max(...highs.slice(-25,-1))
@@ -201,7 +201,7 @@ async function coreLogic(data15, data1h){
 
     // ===== MOMENTUM MODE =====
 let momentum = (price - closes.at(-5)) / price
-let momentumVol = volNow > volAvg * 1.1
+let momentumVol = volNowUSDT >  * 1.05 //1.1
 
 // LONG
 if(breakoutUp && trendLong && momentum > 0.003 && momentumVol){
