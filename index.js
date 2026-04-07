@@ -8,7 +8,7 @@ const LIMIT_1H  = 200
 const RR_THRESHOLD = 1.2
 const RISK_PER_TRADE = 0.005
 const ACCOUNT_BALANCE = 1000
-const MIN_VOL_15M = 200000
+const MIN_VOL_15M = 500000
 
 let isScanning = false
 let lastSignalTime = 0
@@ -177,15 +177,15 @@ async function coreLogic(data15, data1h){
     let trendLTF = Math.abs(ema20 - ema50) / price
     let trendHTF = Math.abs(ema20_1h - ema50_1h) / price
 
-    if(trendLTF < 0.001 || trendHTF < 0.001) return null
+    if(trendLTF < 0.0025 || trendHTF < 0.0025) return null
 
     // ===== ATR =====
     let atrVal = atr(data15.slice(-100))
-    if(atrVal / price < 0.0012) return null // 0.0018
+    if(atrVal / price < 0.0008) return null // 0.0018
 
     // ===== COMPRESSION =====
     let range = (Math.max(...highs.slice(-25)) - Math.min(...lows.slice(-25))) / price
-    if(range > 0.015) return null // nới nhẹ 0.03
+    if(range > 0.03) return null // nới nhẹ 0.03
 
     // ===== BREAKOUT =====
     let prevHigh = Math.max(...highs.slice(-25,-1))
@@ -204,7 +204,7 @@ let momentum = (price - closes.at(-5)) / price
 let momentumVol = volNowUSDT > volAvgUSDT  * 1.05 //1.1
 
 // LONG
-if(breakoutUp && trendLong && momentum > 0.003 && momentumVol){
+if(breakoutUp && trendLong && momentum > 0.0015 && momentumVol){ // 0.
     let entry = price
     let sl = entry - atrVal * 1.2
     let tp = entry + atrVal * 3.5
