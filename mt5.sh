@@ -14,27 +14,25 @@ case "${1:-help}" in
   compile)
     [[ -f "$MT5_DIR/metaeditor64.exe" ]] || { echo 'Set MT5_DIR to the installed terminal folder.'; exit 1; }
     mkdir -p "$MT5_DIR/MQL5/Experts" "$MT5_DIR/MQL5/Presets"
-    cp UbuntuDemoEMA.mq5 BotInputs.mqh StrategyEMA.mqh OrderExecution.mqh "$MT5_DIR/MQL5/Experts/"
-    # Preserve user-edited presets.
-    [[ -f "$MT5_DIR/MQL5/Presets/UbuntuDemoEMA.set" ]] || cp UbuntuDemoEMA.set "$MT5_DIR/MQL5/Presets/"
-    src=$(winepath -w "$MT5_DIR/MQL5/Experts/UbuntuDemoEMA.mq5")
-    log="$MT5_DIR/compile-ema.log"
+    cp MT5Core.mq5 TradeExecution.mqh "$MT5_DIR/MQL5/Experts/"
+    src=$(winepath -w "$MT5_DIR/MQL5/Experts/MT5Core.mq5")
+    log="$MT5_DIR/compile-core.log"
     [[ ! -f "$log" ]] || mv "$log" "$log.previous"
-    [[ ! -f "$MT5_DIR/MQL5/Experts/UbuntuDemoEMA.ex5" ]] || \
-      mv "$MT5_DIR/MQL5/Experts/UbuntuDemoEMA.ex5" "$MT5_DIR/MQL5/Experts/UbuntuDemoEMA.ex5.previous"
+    [[ ! -f "$MT5_DIR/MQL5/Experts/MT5Core.ex5" ]] || \
+      mv "$MT5_DIR/MQL5/Experts/MT5Core.ex5" "$MT5_DIR/MQL5/Experts/MT5Core.ex5.previous"
     wine "$MT5_DIR/metaeditor64.exe" /portable "/compile:$src" "/log:$(winepath -w "$log")"
-    [[ -s "$MT5_DIR/MQL5/Experts/UbuntuDemoEMA.ex5" ]] || {
+    [[ -s "$MT5_DIR/MQL5/Experts/MT5Core.ex5" ]] || {
       echo "Compile did not produce EA. Inspect $log in MetaEditor."; exit 1;
     }
     echo "EA compiled. Inspect compiler log: $log"
     ;;
   login)
     [[ -f "$MT5_DIR/terminal64.exe" ]] || { echo 'Install MT5 first or set MT5_DIR.'; exit 1; }
-    # Same portable data directory as run. Complete demo login in VNC, then exit MT5.
+    # Same portable data directory as run. Complete broker login in VNC, then exit MT5.
     wine "$MT5_DIR/terminal64.exe" /portable
     ;;
   run)
-    [[ -f bot.ini && -f "$MT5_DIR/MQL5/Experts/UbuntuDemoEMA.ex5" ]] || {
+    [[ -f bot.ini && -f "$MT5_DIR/MQL5/Experts/MT5Core.ex5" ]] || {
       echo 'Compile EA and copy bot.ini.example to bot.ini first.'; exit 1;
     }
     chmod 600 bot.ini
