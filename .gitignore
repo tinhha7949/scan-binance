@@ -1,0 +1,8 @@
+# Local configuration and downloaded installers
+bot.ini
+downloads/
+.bot.lock
+*.ex5
+*.log
+*.previous
+.env

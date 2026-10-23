@@ -1,0 +1,11 @@
+name: Check Ubuntu scripts
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  shell-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Bash syntax
+        run: bash -n prepare.sh desktop.sh mt5.sh

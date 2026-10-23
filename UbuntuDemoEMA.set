@@ -1,0 +1,8 @@
+EnableDemoOrders=false
+FastEMA=20
+SlowEMA=50
+Lots=0.01
+StopLossPoints=300
+TakeProfitPoints=600
+MaxSpreadPoints=30
+Magic=23102601

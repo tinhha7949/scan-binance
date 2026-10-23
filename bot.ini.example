@@ -1,0 +1,14 @@
+; Login to your broker DEMO account in the VNC desktop first.
+; Never put a password in this distributable template.
+[Experts]
+Enabled=1
+AllowLiveTrading=0
+AllowDllImport=0
+Account=1
+Profile=1
+
+[StartUp]
+Expert=UbuntuDemoEMA
+Symbol=EURUSD
+Period=M15
+ExpertParameters=UbuntuDemoEMA.set
